@@ -3,7 +3,7 @@
 ## Project Overview
 - **Name**: SRM dROIds CoE Mission Tracker
 - **Goal**: A living progress tracker for the SRM dROIds dual-campus drone innovation Centre of Excellence — not just a lab, but a fused CoE operating system for Ramapuram (design/simulation/fabrication) and Trichy (flight/field validation/RPTO).
-- **Features**: Dual-role passcode-based access (CoE Leader + Venture Owner), KPI/KRA dashboard integrated with daily/weekly/monthly reporting, cohort pipeline tracker (Stages A→E), 3D facility warehouse layout viewer (Three.js), GSAP-animated progress tracking, procurement strategy with three-bucket spend logic, partner/vendor stack manager, Phase 1 execution roadmap, LLM-powered report synthesis (Venture Owner only, using OpenAI API key), CSV export, shareable report links.
+- **Features**: Dual-role passcode-based access (CoE Leader + Venture Owner), KPI/KRA dashboard with submission/review/approve workflow, premium glassmorphism UX with drone hero imagery and floating animations, cohort pipeline tracker (Stages A→E), 3D facility warehouse layout viewer (Three.js), GSAP-animated progress tracking, procurement strategy with three-bucket spend logic, partner/vendor stack manager, Phase 1 execution roadmap, LLM-powered report synthesis (Venture Owner only, using OpenAI API key), CSV export, shareable report links, toast notifications.
 
 ## URLs
 - **Production**: https://61702bf7-566e-4626-811a-a241bf8e6f5b.vip.gensparksite.com
@@ -19,12 +19,14 @@
 - **Database**: Cloudflare D1 (SQLite) — `61702bf7-566e-4626-811a-a241bf8e6f5b-db`
 - **D1 Binding**: `DB`
 
-### Data Models (14 tables)
+### Data Models (16 tables)
 | Table | Purpose |
 |-------|---------|
 | `access_codes` | Passcode-based authentication for CoE Leader and Venture Owner roles |
 | `kras` | 6 Key Result Areas from the mission document |
 | `kpis` | 21 Key Performance Indicators mapped to KRAs |
+| `kpi_submissions` | CoE Leader KPI updates submitted for Venture Owner review/approval (v2) |
+| `report_submissions` | Daily/weekly/monthly reports submitted for Venture Owner review/approval (v2) |
 | `cohorts` | Student cohort phases (Stages A→E) |
 | `students` | Individual students with progression tracking |
 | `daily_updates` | CoE Leader → Venture Owner daily reports |
@@ -48,7 +50,7 @@
 
 ### CoE Leader View
 1. Open the application URL and enter passcode `dROIds2026!`
-2. **Dashboard**: View all 6 KRAs and 21 KPIs. Click any KRA card to edit KPI values and statuses.
+2. **Dashboard**: View all 6 KRAs and 21 KPIs. Click any KRA card to open the KPI editor. Use "Submit for Review" inside each KRA to send KPI updates to the Venture Owner for approval. Track submission status (pending / approved / rejected) with color-coded badges.
 3. **Cohorts**: See the 5-stage pipeline (Foundation → Build → Field → R&D → Service). Add new cohorts.
 4. **Facility**: Toggle between Ramapuram and Trichy campus layouts in 3D with Three.js. Drag to orbit, scroll to zoom.
 5. **Reports**: Submit daily updates (attendance, safety, blockers, decisions needed). View weekly/monthly reports.
@@ -56,12 +58,13 @@
 
 ### Venture Owner View
 1. Open the application URL and enter passcode `VentureSRM!26`
-2. **Dashboard**: Monitor CoE Director's KPI performance and roadmap progress.
-3. **Procurement**: View all items across three spend buckets. Update procurement status inline.
-4. **Partners**: Manage vendor, RPTO, and training partner relationships.
-5. **Reports**: View all daily/weekly/monthly reports. Export KPI data as CSV. Share reports via link.
-6. **GenAI**: Enter your OpenAI API key, select report type, and generate AI-powered synthesis of all CoE data. Save synthesized reports.
-7. **Admin**: Manage access passcodes — add new codes, enable/disable existing ones.
+2. **Dashboard**: Monitor CoE Director's KPI performance and roadmap progress. Click "Review Pending Submissions" to jump directly to the Review tab.
+3. **Review** (v2): All KPI submissions from CoE Leader in one view. Filter by status (Pending / Approved / Rejected / All). Click any submission to review: **edit** KPI values inline, **approve** to accept changes, or **reject** with reviewer notes explaining why. Report submissions are also reviewed here.
+4. **Procurement**: View all items across three spend buckets. Update procurement status inline.
+5. **Partners**: Manage vendor, RPTO, and training partner relationships.
+6. **Reports**: View all daily/weekly/monthly reports. Export KPI data as CSV. Share reports via link.
+7. **GenAI**: Enter your OpenAI API key, select report type, and generate AI-powered synthesis of all CoE data. Save synthesized reports.
+8. **Admin**: Manage access passcodes — add new codes, enable/disable existing ones.
 
 ### Sharing Reports
 1. Navigate to Reports → Saved Reports
@@ -72,7 +75,7 @@
 - **Platform**: Cloudflare Workers for Platform (gsk-hosted-deploy)
 - **Status**: ✅ Active
 - **Tech Stack**: Hono + TypeScript + Vite + TailwindCSS + Chart.js + Three.js + GSAP + D1 SQLite
-- **Last Updated**: 2026-08-09
+- **Last Updated**: 2026-08-09 (v2 — submission/review/approve workflow + premium glassmorphism UX)
 
 ## API Endpoints
 | Method | Path | Auth | Description |
@@ -99,3 +102,9 @@
 | GET | `/api/export/csv/:type` | No | Export data as CSV |
 | GET | `/api/auth/codes` | No | List access codes (admin) |
 | POST | `/api/auth/codes` | No | Create access code (admin) |
+| POST | `/api/submissions/kpi` | No | Submit KPI update for Venture Owner review (v2) |
+| GET | `/api/submissions` | No | List KPI submissions (`?status=pending_review\|approved\|rejected`) (v2) |
+| PUT | `/api/submissions/:id` | No | Approve, reject, or edit a KPI submission (v2) |
+| POST | `/api/submissions/report` | No | Submit report for Venture Owner review (v2) |
+| GET | `/api/submissions/report` | No | List report submissions (v2) |
+| PUT | `/api/submissions/report/:id` | No | Approve or reject a report submission (v2) |
