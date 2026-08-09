@@ -983,6 +983,240 @@ app.get('/api/tracker/export/csv', async (c) => {
 })
 
 // ============================================================
+// FACILITY SPACE PLANNER (v4)
+// Configure physical rooms by square footage and place equipment
+// with square footprints; rendered as a 3D floor layout.
+// ============================================================
+
+app.get('/api/space/rooms', async (c) => {
+  const campus = c.req.query('campus')
+  let rows
+  if (campus) {
+    rows = await c.env.DB.prepare('SELECT * FROM space_rooms WHERE campus = ? ORDER BY sort_order, id').bind(campus).all()
+  } else {
+    rows = await c.env.DB.prepare('SELECT * FROM space_rooms ORDER BY campus, sort_order, id').all()
+  }
+  return c.json(rows.results)
+})
+
+app.post('/api/space/rooms', async (c) => {
+  const b = await c.req.json()
+  if (!b.name) return c.json({ error: 'name required' }, 400)
+  const r = await c.env.DB.prepare(
+    'INSERT INTO space_rooms (campus, name, room_type, width_ft, length_ft, notes, sort_order) VALUES (?,?,?,?,?,?,?)'
+  ).bind(b.campus || 'ramapuram', b.name, b.room_type || 'lab', b.width_ft || 40, b.length_ft || 30, b.notes || '', b.sort_order || 99).run()
+  return c.json({ ok: true, id: r.meta.last_row_id })
+})
+
+app.put('/api/space/rooms/:id', async (c) => {
+  const id = c.req.param('id')
+  const b = await c.req.json()
+  await c.env.DB.prepare(
+    `UPDATE space_rooms SET campus = COALESCE(?, campus), name = COALESCE(?, name),
+     room_type = COALESCE(?, room_type), width_ft = COALESCE(?, width_ft), length_ft = COALESCE(?, length_ft),
+     notes = COALESCE(?, notes), updated_at = datetime('now') WHERE id = ?`
+  ).bind(b.campus ?? null, b.name ?? null, b.room_type ?? null, b.width_ft ?? null, b.length_ft ?? null, b.notes ?? null, id).run()
+  return c.json({ ok: true })
+})
+
+app.delete('/api/space/rooms/:id', async (c) => {
+  const id = c.req.param('id')
+  await c.env.DB.prepare('DELETE FROM space_placements WHERE room_id = ?').bind(id).run()
+  await c.env.DB.prepare('DELETE FROM space_rooms WHERE id = ?').bind(id).run()
+  return c.json({ ok: true })
+})
+
+app.get('/api/space/placements', async (c) => {
+  const roomId = c.req.query('room_id')
+  let rows
+  if (roomId) {
+    rows = await c.env.DB.prepare(
+      `SELECT p.*, r.name as room_name, r.width_ft as room_width, r.length_ft as room_length, r.campus
+       FROM space_placements p JOIN space_rooms r ON p.room_id = r.id
+       WHERE p.room_id = ? ORDER BY p.sort_order, p.id`
+    ).bind(roomId).all()
+  } else {
+    rows = await c.env.DB.prepare(
+      `SELECT p.*, r.name as room_name, r.width_ft as room_width, r.length_ft as room_length, r.campus
+       FROM space_placements p JOIN space_rooms r ON p.room_id = r.id
+       ORDER BY p.room_id, p.sort_order, p.id`
+    ).all()
+  }
+  return c.json(rows.results)
+})
+
+app.post('/api/space/placements', async (c) => {
+  const b = await c.req.json()
+  if (!b.room_id || !b.item_name) return c.json({ error: 'room_id and item_name required' }, 400)
+  const r = await c.env.DB.prepare(
+    `INSERT INTO space_placements (room_id, item_name, category, footprint_ft, x_ft, y_ft, height_ft, color, status, notes, sort_order)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(b.room_id, b.item_name, b.category || 'equipment', b.footprint_ft || 4, b.x_ft || 0, b.y_ft || 0,
+    b.height_ft || 4, b.color || '#6366f1', b.status || 'planned', b.notes || '', b.sort_order || 99).run()
+  return c.json({ ok: true, id: r.meta.last_row_id })
+})
+
+app.put('/api/space/placements/:id', async (c) => {
+  const id = c.req.param('id')
+  const b = await c.req.json()
+  await c.env.DB.prepare(
+    `UPDATE space_placements SET item_name = COALESCE(?, item_name), category = COALESCE(?, category),
+     footprint_ft = COALESCE(?, footprint_ft), x_ft = COALESCE(?, x_ft), y_ft = COALESCE(?, y_ft),
+     height_ft = COALESCE(?, height_ft), color = COALESCE(?, color), status = COALESCE(?, status),
+     notes = COALESCE(?, notes) WHERE id = ?`
+  ).bind(b.item_name ?? null, b.category ?? null, b.footprint_ft ?? null, b.x_ft ?? null, b.y_ft ?? null,
+    b.height_ft ?? null, b.color ?? null, b.status ?? null, b.notes ?? null, id).run()
+  return c.json({ ok: true })
+})
+
+app.delete('/api/space/placements/:id', async (c) => {
+  await c.env.DB.prepare('DELETE FROM space_placements WHERE id = ?').bind(c.req.param('id')).run()
+  return c.json({ ok: true })
+})
+
+// ============================================================
+// EMAIL SHARING (v4) — formatted HTML snapshot via Resend
+// ============================================================
+
+function escapeHtml(s: string) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+const inr = (n: number) => '₹' + (Number(n) || 0).toLocaleString('en-IN')
+
+async function buildEmailHtml(db: D1Database, scope: string): Promise<{ subject: string; html: string }> {
+  const wrap = (title: string, body: string) => `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#0f172a;font-family:Arial,Helvetica,sans-serif;">
+  <div style="max-width:680px;margin:0 auto;padding:24px;">
+    <div style="background:linear-gradient(135deg,#1e1b4b,#0f172a);border-radius:16px;padding:24px 28px;margin-bottom:20px;">
+      <div style="color:#818cf8;font-size:22px;font-weight:800;">SRM dROIds — CoE Mission Tracker</div>
+      <div style="color:#94a3b8;font-size:13px;margin-top:4px;">${escapeHtml(title)} · generated ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC</div>
+    </div>
+    ${body}
+    <div style="color:#475569;font-size:11px;margin-top:24px;text-align:center;">SRM dROIds Dual-Campus Drone Centre of Excellence — automated report</div>
+  </div></body></html>`
+  const card = (title: string, inner: string) => `<div style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:18px 20px;margin-bottom:14px;">
+    <div style="color:#e2e8f0;font-size:15px;font-weight:700;margin-bottom:10px;">${escapeHtml(title)}</div>${inner}</div>`
+  const row = (label: string, value: string, color = '#cbd5e1') =>
+    `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #1e293b;"><span style="color:#94a3b8;font-size:12px;">${escapeHtml(label)}</span><span style="color:${color};font-size:12px;font-weight:600;">${escapeHtml(value)}</span></div>`
+
+  if (scope === 'tracker' || scope === 'report') {
+    const stages = await db.prepare('SELECT * FROM setup_stages ORDER BY sort_order').all()
+    const items = await db.prepare(
+      `SELECT li.*, s.title as section_title, st.name as stage_name, st.sort_order as so
+       FROM setup_line_items li JOIN setup_sections s ON li.section_id = s.id JOIN setup_stages st ON s.stage_id = st.id
+       ORDER BY st.sort_order, s.sort_order, li.sort_order, li.id`
+    ).all()
+    const byStage: Record<string, any[]> = {}
+    for (const it of items.results as any[]) { (byStage[it.stage_name] = byStage[it.stage_name] || []).push(it) }
+    let body = ''
+    let totalEst = 0, totalItems = 0, doneItems = 0
+    for (const st of stages.results as any[]) {
+      const list = byStage[st.name] || []
+      totalItems += list.length
+      doneItems += list.filter(i => i.status === 'done').length
+      totalEst += list.reduce((a, i) => a + (i.estimated_cost || 0), 0)
+      const rowsHtml = list.map(i =>
+        `<tr><td style="padding:6px 8px;color:#e2e8f0;font-size:12px;border-bottom:1px solid #334155;">${escapeHtml(i.item_name)}<div style="color:#64748b;font-size:10px;">${escapeHtml(i.section_title)}</div></td>
+         <td style="padding:6px 8px;color:#94a3b8;font-size:11px;border-bottom:1px solid #334155;">${escapeHtml(i.stakeholder || '—')}</td>
+         <td style="padding:6px 8px;color:#94a3b8;font-size:11px;border-bottom:1px solid #334155;">${escapeHtml(i.priority)}</td>
+         <td style="padding:6px 8px;color:#94a3b8;font-size:11px;border-bottom:1px solid #334155;text-align:right;">${inr(i.estimated_cost)}</td>
+         <td style="padding:6px 8px;color:#94a3b8;font-size:11px;border-bottom:1px solid #334155;text-align:center;">${i.progress_pct}%</td>
+         <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #334155;color:${i.status === 'done' ? '#34d399' : i.status === 'blocked' || i.status === 'at_risk' ? '#f87171' : '#818cf8'};">${escapeHtml(i.status.replace(/_/g, ' '))}</td></tr>`
+      ).join('')
+      body += card(`${st.name} (${list.filter(i => i.status === 'done').length}/${list.length} done)`,
+        list.length === 0 ? '<div style="color:#64748b;font-size:12px;">No line items yet.</div>' :
+        `<table style="width:100%;border-collapse:collapse;"><thead><tr style="text-align:left;">
+          <th style="padding:4px 8px;color:#64748b;font-size:10px;">LINE ITEM</th><th style="padding:4px 8px;color:#64748b;font-size:10px;">OWNER</th>
+          <th style="padding:4px 8px;color:#64748b;font-size:10px;">PRIORITY</th><th style="padding:4px 8px;color:#64748b;font-size:10px;text-align:right;">EST.</th>
+          <th style="padding:4px 8px;color:#64748b;font-size:10px;">PROG.</th><th style="padding:4px 8px;color:#64748b;font-size:10px;">STATUS</th></tr></thead>
+          <tbody>${rowsHtml}</tbody></table>`)
+    }
+    const pct = totalItems > 0 ? Math.round((doneItems / totalItems) * 100) : 0
+    body = card('Setup Summary', row('Total line items', String(totalItems)) + row('Completed', `${doneItems} (${pct}%)`, '#34d399') + row('Estimated spend', inr(totalEst), '#fbbf24')) + body
+    return { subject: `CoE Foundational Setup Report — ${pct}% complete`, html: wrap('Foundational Setup Tracker — Full Report', body) }
+  }
+
+  if (scope === 'kpis') {
+    const kpis = await db.prepare(
+      `SELECT kpis.*, kras.title as kra_title FROM kpis JOIN kras ON kpis.kra_id = kras.id ORDER BY kras.sort_order, kpis.sort_order`
+    ).all()
+    const byKra: Record<string, any[]> = {}
+    for (const k of kpis.results as any[]) { (byKra[k.kra_title] = byKra[k.kra_title] || []).push(k) }
+    let body = ''
+    let done = 0, total = 0
+    for (const [kra, list] of Object.entries(byKra)) {
+      total += list.length
+      done += list.filter(k => k.status === 'completed').length
+      body += card(kra, list.map(k =>
+        row(k.title, `${k.current_value ?? 0}/${k.target_value ?? '—'} ${k.metric_unit || ''} · ${k.status}`,
+          k.status === 'completed' ? '#34d399' : k.status === 'at_risk' ? '#f87171' : '#cbd5e1')).join(''))
+    }
+    body = card('KPI Scorecard Summary', row('KPIs completed', `${done}/${total} (${total > 0 ? Math.round(done / total * 100) : 0}%)`, '#34d399')) + body
+    return { subject: `CoE KPI Scorecard — ${done}/${total} completed`, html: wrap('KPI Scorecard Report', body) }
+  }
+
+  if (scope === 'procurement') {
+    const items = await db.prepare('SELECT * FROM procurement_items ORDER BY spend_bucket, category, item_name').all()
+    const labels: Record<number, string> = { 1: 'Must-Have Now', 2: 'Buy Once Growth Proven', 3: 'Rent/Partner First' }
+    let total = 0
+    const rowsHtml = (items.results as any[]).map(i => {
+      total += i.estimated_cost || 0
+      return `<tr><td style="padding:6px 8px;color:#e2e8f0;font-size:12px;border-bottom:1px solid #334155;">${escapeHtml(i.item_name)}</td>
+        <td style="padding:6px 8px;color:#94a3b8;font-size:11px;border-bottom:1px solid #334155;">${escapeHtml(labels[i.spend_bucket] || 'Bucket ' + i.spend_bucket)}</td>
+        <td style="padding:6px 8px;color:#94a3b8;font-size:11px;border-bottom:1px solid #334155;text-align:right;">${inr(i.estimated_cost)}</td>
+        <td style="padding:6px 8px;color:#818cf8;font-size:11px;border-bottom:1px solid #334155;">${escapeHtml(i.status)}</td></tr>`
+    }).join('')
+    const body = card(`Procurement Strategy — Total Est. ${inr(total)}`,
+      `<table style="width:100%;border-collapse:collapse;"><thead><tr style="text-align:left;">
+       <th style="padding:4px 8px;color:#64748b;font-size:10px;">ITEM</th><th style="padding:4px 8px;color:#64748b;font-size:10px;">BUCKET</th>
+       <th style="padding:4px 8px;color:#64748b;font-size:10px;text-align:right;">EST.</th><th style="padding:4px 8px;color:#64748b;font-size:10px;">STATUS</th></tr></thead>
+       <tbody>${rowsHtml}</tbody></table>`)
+    return { subject: `CoE Procurement Report — Est. ${inr(total)}`, html: wrap('Procurement Strategy Report', body) }
+  }
+
+  return { subject: 'CoE Report', html: wrap('CoE Report', card('Info', '<div style="color:#94a3b8;font-size:12px;">Unknown scope.</div>')) }
+}
+
+// Preview the formatted email (same HTML that would be sent)
+app.get('/api/email/preview', async (c) => {
+  const scope = c.req.query('scope') || 'report'
+  const { html } = await buildEmailHtml(c.env.DB, scope)
+  return new Response(html, { headers: { 'Content-Type': 'text/html' } })
+})
+
+// Send the formatted email via Resend
+app.post('/api/email/send', async (c) => {
+  const { to, scope, api_key, note } = await c.req.json()
+  if (!to || !Array.isArray(to) || to.length === 0) return c.json({ error: 'Recipient email list required' }, 400)
+  if (!api_key) return c.json({ error: 'Resend API key required (starts with re_)' }, 400)
+  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  const valid = to.filter((t: string) => emailRe.test(String(t).trim()))
+  if (valid.length === 0) return c.json({ error: 'No valid email addresses provided' }, 400)
+
+  const { subject, html } = await buildEmailHtml(c.env.DB, scope || 'report')
+  const noteHtml = note ? `<div style="background:#312e81;border:1px solid #4f46e5;border-radius:12px;padding:14px 16px;margin-bottom:14px;color:#c7d2fe;font-size:13px;"><strong>Note from sender:</strong> ${escapeHtml(note)}</div>` : ''
+  // Splice the note just before the first data card of the email body
+  const bodyHtml = note ? html.replace(/(<\/div>\s*)\n?\s*(<div style="background:#1e293b)/, `$1${noteHtml}$2`) : html
+
+  try {
+    const resp = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${api_key}` },
+      body: JSON.stringify({
+        from: 'SRM dROIds CoE <onboarding@resend.dev>',
+        to: valid,
+        subject,
+        html: bodyHtml
+      })
+    })
+    const data: any = await resp.json()
+    if (!resp.ok) return c.json({ error: `Resend error: ${data.message || resp.status}` }, 502)
+    return c.json({ ok: true, id: data.id, sent_to: valid })
+  } catch (e: any) {
+    return c.json({ error: `Email send failed: ${e.message}` }, 500)
+  }
+})
+
+// ============================================================
 // EXPORT / DOWNLOAD
 // ============================================================
 app.get('/api/export/csv/:type', async (c) => {
@@ -1105,6 +1339,13 @@ const SPA_HTML = `<!DOCTYPE html>
       background-size: cover; background-position: center;
     }
     .grid-pattern { background-image: radial-gradient(rgba(99,102,241,0.1) 1px, transparent 1px); background-size: 30px 30px; }
+    /* body carries BOTH classes — layer the dots over the gradient (first image wins) */
+    body.hero-bg.grid-pattern {
+      background-image: radial-gradient(rgba(99,102,241,0.1) 1px, transparent 1px),
+                        linear-gradient(135deg, #0f172a 0%, #1e1b4b 30%, #0f172a 60%, #0c1929 100%);
+      background-size: 30px 30px, cover;
+      background-attachment: fixed;
+    }
     .status-pending_review { background: rgba(251,191,36,0.2); color: #fbbf24; }
     .status-approved { background: rgba(52,211,153,0.2); color: #34d399; }
     .status-rejected { background: rgba(248,113,113,0.2); color: #f87171; }
@@ -1115,6 +1356,48 @@ const SPA_HTML = `<!DOCTYPE html>
     @keyframes slideOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
     @keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
     .float-anim { animation: float 4s ease-in-out infinite; }
+
+    /* ── DAY / NIGHT THEME ── default is night; body.day-mode flips to light ── */
+    body { transition: background-color 0.3s ease, color 0.3s ease; }
+    body.day-mode.hero-bg, body.day-mode .hero-bg { background: linear-gradient(135deg, #f1f5f9 0%, #e0e7ff 30%, #f8fafc 60%, #ecfeff 100%); }
+    body.day-mode.hero-bg::before { opacity: 0.14;
+      background: radial-gradient(ellipse 80% 50% at 50% -10%, #818cf8, transparent),
+                  radial-gradient(ellipse 60% 40% at 80% 80%, #22d3ee, transparent),
+                  radial-gradient(ellipse 50% 60% at 20% 50%, #a78bfa, transparent);
+    }
+    body.day-mode { color: #1e293b !important; }
+    body.day-mode.grid-pattern { background-image: radial-gradient(rgba(79,70,229,0.12) 1px, transparent 1px); }
+    /* day-mode combined rule — dots layered over the light gradient */
+    body.day-mode.hero-bg.grid-pattern {
+      background-image: radial-gradient(rgba(79,70,229,0.12) 1px, transparent 1px),
+                        linear-gradient(135deg, #f1f5f9 0%, #e0e7ff 30%, #f8fafc 60%, #ecfeff 100%) !important;
+      background-size: 30px 30px, cover !important;
+      background-attachment: fixed !important;
+    }
+    body.day-mode .drone-hero-overlay { opacity: 0.05; }
+    body.day-mode .glass-card {
+      background: rgba(255,255,255,0.82); border: 1px solid rgba(15,23,42,0.08);
+      box-shadow: 0 8px 32px rgba(15,23,42,0.08);
+    }
+    body.day-mode .glass-card:hover { border-color: rgba(79,70,229,0.35); box-shadow: 0 12px 40px rgba(79,70,229,0.15); }
+    body.day-mode .glow-text { text-shadow: 0 0 20px rgba(79,70,229,0.25); }
+    /* Tailwind dark-palette overrides for day mode */
+    body.day-mode .text-slate-100, body.day-mode .text-slate-200 { color: #0f172a !important; }
+    body.day-mode .text-slate-300 { color: #1e293b !important; }
+    body.day-mode .text-slate-400 { color: #475569 !important; }
+    body.day-mode .text-slate-500 { color: #64748b !important; }
+    body.day-mode .text-slate-600 { color: #94a3b8 !important; }
+    body.day-mode .bg-slate-900\\/60, body.day-mode .bg-slate-900 { background-color: rgba(241,245,249,0.9) !important; }
+    body.day-mode .bg-slate-800\\/60, body.day-mode .bg-slate-800\\/50, body.day-mode .bg-slate-800 { background-color: rgba(226,232,240,0.85) !important; }
+    body.day-mode .bg-slate-700\\/50, body.day-mode .bg-slate-700\\/30, body.day-mode .bg-slate-700 { background-color: rgba(203,213,225,0.6) !important; }
+    body.day-mode .border-slate-800, body.day-mode .border-slate-700\\/50, body.day-mode .border-slate-700\\/30,
+    body.day-mode .border-slate-700, body.day-mode .border-slate-600 { border-color: rgba(15,23,42,0.12) !important; }
+    body.day-mode .hover\\:bg-slate-800\\/50:hover, body.day-mode .hover\\:bg-slate-700:hover, body.day-mode .hover\\:bg-slate-600:hover { background-color: rgba(203,213,225,0.8) !important; }
+    body.day-mode .hover\\:text-slate-300:hover, body.day-mode .hover\\:text-slate-200:hover { color: #0f172a !important; }
+    body.day-mode input, body.day-mode textarea, body.day-mode select { color: #0f172a !important; }
+    body.day-mode input::placeholder, body.day-mode textarea::placeholder { color: #94a3b8 !important; }
+    body.day-mode #theme-toggle .theme-icon-moon { display: none; }
+    body:not(.day-mode) #theme-toggle .theme-icon-sun { display: none; }
   </style>
 </head>
 <body class="hero-bg grid-pattern text-slate-100 min-h-screen font-sans antialiased">

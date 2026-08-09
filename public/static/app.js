@@ -11,13 +11,36 @@
     passcode: null,
     activeView: 'dashboard',
     llmApiKey: null,
+    emailApiKey: null,
     charts: {},
     threeScene: null,
     facilityCampus: 'ramapuram',
     reviewFilter: 'pending_review',
     setupTab: 'tracker',
-    setupStageId: 0
+    setupStageId: 0,
+    theme: localStorage.getItem('srm_theme') || 'night',
+    spaceRoomId: 0,
+    facilityMode: 'zones' // 'zones' (existing facility map) | 'planner' (sqft space planner)
   }
+
+  // ── DAY / NIGHT THEME ────────────────────────────────────
+  function applyTheme() {
+    document.body.classList.toggle('day-mode', state.theme === 'day')
+    const iconSun = document.querySelector('#theme-toggle .theme-icon-sun')
+    const iconMoon = document.querySelector('#theme-toggle .theme-icon-moon')
+    if (iconSun) iconSun.style.display = state.theme === 'day' ? 'none' : ''
+    if (iconMoon) iconMoon.style.display = state.theme === 'day' ? '' : 'none'
+  }
+  function toggleTheme() {
+    state.theme = state.theme === 'day' ? 'night' : 'day'
+    localStorage.setItem('srm_theme', state.theme)
+    applyTheme()
+    // Re-render 3D views so scene colors follow the theme
+    if (state.activeView === 'facility') initThreeJS()
+  }
+  window._toggleTheme = toggleTheme
+  // Apply persisted theme on boot (before first paint of views)
+  if (state.theme === 'day') document.body.classList.add('day-mode')
 
   // Lookup cache for tracker entities (sections/items by id)
   let setupCache = { stages: [], sections: {}, items: {}, submissions: [] }
@@ -26,6 +49,28 @@
   const $ = (s) => document.querySelector(s)
   const $$ = (s) => document.querySelectorAll(s)
   const root = $('#app-root')
+
+  // ── SAFE ANIMATION — never leaves elements invisible ────
+  // gsap.from() can leave elements stuck at opacity:0 if GSAP
+  // fails to load or the animation is interrupted. This helper
+  // guarantees a visible end-state with a hard fallback timer.
+  function animateIn(selector, vars = {}) {
+    const els = typeof selector === 'string' ? $$(selector) : [selector]
+    if (!els || els.length === 0) return
+    if (!window.gsap) return // CSS default state is visible — fine
+    try {
+      gsap.from(selector, { duration: 0.5, ...vars })
+      // Hard fallback: force final visible state after animation window
+      const dur = ((vars.duration || 0.5) + (vars.stagger ? vars.stagger * els.length : 0)) * 1000 + 400
+      setTimeout(() => {
+        els.forEach(el => {
+          if (!el || !el.style) return
+          const op = parseFloat(getComputedStyle(el).opacity)
+          if (op < 0.95) { el.style.opacity = '1'; el.style.transform = 'none' }
+        })
+      }, Math.min(dur, 3000))
+    } catch (e) { /* CSS default state is visible — fine */ }
+  }
 
   // ── TOAST ────────────────────────────────────────────────
   function toast(msg, type = 'success') {
@@ -136,9 +181,14 @@
             </span>
           </div>
           <div class="flex items-center gap-1 sm:gap-2" id="nav-tabs"></div>
-          <button id="logout-btn" class="text-slate-500 hover:text-slate-300 px-3 py-2 rounded-xl hover:bg-slate-800/50 transition text-sm border border-transparent hover:border-slate-700/50">
-            <i class="fas fa-sign-out-alt"></i> <span class="hidden sm:inline ml-1">Exit</span>
-          </button>
+          <div class="flex items-center gap-1">
+            <button id="theme-toggle" title="Toggle day / night mode" class="text-slate-500 hover:text-amber-300 px-3 py-2 rounded-xl hover:bg-slate-800/50 transition text-sm border border-transparent hover:border-slate-700/50">
+              <i class="fas fa-sun theme-icon-sun"></i><i class="fas fa-moon theme-icon-moon"></i>
+            </button>
+            <button id="logout-btn" class="text-slate-500 hover:text-slate-300 px-3 py-2 rounded-xl hover:bg-slate-800/50 transition text-sm border border-transparent hover:border-slate-700/50">
+              <i class="fas fa-sign-out-alt"></i> <span class="hidden sm:inline ml-1">Exit</span>
+            </button>
+          </div>
         </div>
       </nav>
       <main id="main-content" class="max-w-7xl mx-auto px-4 sm:px-6 py-8"></main>`
@@ -181,6 +231,8 @@
     $('#logout-btn').addEventListener('click', () => {
       state.role = null; state.passcode = null; state.activeView = 'dashboard'; renderLogin()
     })
+    $('#theme-toggle').addEventListener('click', toggleTheme)
+    applyTheme()
 
     navigateView()
     gsap.from('#main-nav', { y: -60, opacity: 0, duration: 0.5, ease: 'power2.out' })
@@ -287,7 +339,7 @@
         lnk.addEventListener('click', (e) => { e.preventDefault(); state.activeView = 'review'; navigateView() })
       })
 
-      gsap.from('#kra-grid > div', { y: 30, opacity: 0, duration: 0.5, stagger: 0.08 })
+      animateIn('#kra-grid > div', { y: 30, opacity: 0, stagger: 0.08 })
     } catch (e) {
       content.innerHTML = errorHtml('dashboard', e)
     }
@@ -310,7 +362,7 @@
           <div class="h-full bg-${color}-500 rounded-full transition-all duration-700" style="width:${kra.completion}%"></div>
         </div>
         <div class="space-y-1.5" id="kpi-list-${kra.id}"></div>
-        <div class="mt-3 text-xs text-slate-600 flex items-center justify-between">
+        <div class="mt-3 text-xs text-slate-500 flex items-center justify-between">
           <span>${kra.completed}/${kra.total} KPIs &middot; Weight: ${kra.weight}</span>
           <i class="fas fa-chevron-right text-slate-600"></i>
         </div>`
@@ -319,7 +371,7 @@
 
       const list = card.querySelector(`#kpi-list-${kra.id}`)
       kra.kpis.forEach(kpi => {
-        const statusColors = { completed: 'text-emerald-400', on_track: 'text-blue-400', in_progress: 'text-amber-400', at_risk: 'text-red-400', pending: 'text-slate-600' }
+        const statusColors = { completed: 'text-emerald-400', on_track: 'text-blue-400', in_progress: 'text-amber-400', at_risk: 'text-red-400', pending: 'text-slate-400' }
         const statusIcons = { completed: 'fa-check-circle', on_track: 'fa-arrow-trend-up', in_progress: 'fa-spinner', at_risk: 'fa-exclamation-triangle', pending: 'fa-circle' }
         const row = document.createElement('div')
         row.className = 'flex items-center justify-between text-xs'
@@ -704,22 +756,38 @@
     })
   }
 
-  // ── FACILITY 3D VIEW ─────────────────────────────────────
+  // ── FACILITY 3D VIEW (Zones map + sqft Space Planner) ────
   async function renderFacilityView() {
     const content = $('#main-content')
+    const isPlanner = state.facilityMode === 'planner'
     content.innerHTML = `
       <div class="space-y-4">
-        <div class="flex items-center justify-between">
-          <div><h2 class="text-xl font-bold">Facility Layout</h2><p class="text-sm text-slate-400">3D Warehouse &amp; Lab Layout</p></div>
-          <div class="flex gap-1 bg-slate-900/60 rounded-xl p-1 border border-slate-800">
-            <button id="fac-ramapuram" class="campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-600 text-white">Ramapuram</button>
-            <button id="fac-trichy" class="campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200">Trichy</button>
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div><h2 class="text-xl font-bold">Facility Layout</h2><p class="text-sm text-slate-400">${isPlanner ? 'Space Planner — configure rooms by sq-ft and place equipment footprints in 3D' : '3D Warehouse &amp; Lab Layout'}</p></div>
+          <div class="flex items-center gap-2">
+            <div class="flex gap-1 bg-slate-900/60 rounded-xl p-1 border border-slate-800">
+              <button id="fac-mode-zones" class="px-4 py-2 rounded-lg text-sm font-medium transition ${!isPlanner ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}"><i class="fas fa-cube mr-1"></i>Zones</button>
+              <button id="fac-mode-planner" class="px-4 py-2 rounded-lg text-sm font-medium transition ${isPlanner ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}"><i class="fas fa-drafting-compass mr-1"></i>Space Planner</button>
+            </div>
+            ${!isPlanner ? `<div class="flex gap-1 bg-slate-900/60 rounded-xl p-1 border border-slate-800">
+              <button id="fac-ramapuram" class="campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-600 text-white">Ramapuram</button>
+              <button id="fac-trichy" class="campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200">Trichy</button>
+            </div>` : ''}
           </div>
         </div>
+        <div id="facility-body"></div>
+      </div>`
+
+    $('#fac-mode-zones').addEventListener('click', () => { state.facilityMode = 'zones'; renderFacilityView() })
+    $('#fac-mode-planner').addEventListener('click', () => { state.facilityMode = 'planner'; renderFacilityView() })
+
+    if (isPlanner) { renderSpacePlanner(); return }
+
+    $('#facility-body').innerHTML = `
+      <div class="space-y-4">
         <div id="three-container" class="glass-card rounded-2xl" style="height:500px;"></div>
         <div id="facility-legend" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
       </div>`
-
     document.getElementById('fac-ramapuram').addEventListener('click', () => { state.facilityCampus = 'ramapuram'; updateCampusToggles(); initThreeJS() })
     document.getElementById('fac-trichy').addEventListener('click', () => { state.facilityCampus = 'trichy'; updateCampusToggles(); initThreeJS() })
     initThreeJS()
@@ -730,6 +798,345 @@
     if (!r || !t) return
     if (state.facilityCampus === 'ramapuram') { r.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-600 text-white'; t.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200' }
     else { t.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-600 text-white'; r.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200' }
+  }
+
+  // ── SPACE PLANNER — sqft room config + 3D footprint layout ──
+  const SPACE_STATUS_COLORS = { planned: 'text-amber-400', ordered: 'text-sky-400', installed: 'text-indigo-400', operational: 'text-emerald-400' }
+  const SPACE_CATEGORY_COLORS = { equipment: '#6366f1', machinery: '#ef4444', printer_3d: '#10b981', workbench: '#f59e0b', storage: '#8b5cf6', safety: '#dc2626', power: '#0ea5e9', test_area: '#f97316', furniture: '#64748b' }
+
+  async function renderSpacePlanner() {
+    const body = $('#facility-body')
+    if (!body) return
+    try {
+      const { data: rooms } = await API.get('/space/rooms')
+      if (!state.spaceRoomId || !rooms.find(r => r.id === state.spaceRoomId)) {
+        state.spaceRoomId = rooms.length ? rooms[0].id : 0
+      }
+      const room = rooms.find(r => r.id === state.spaceRoomId)
+      let placements = []
+      if (room) {
+        const res = await API.get(`/space/placements?room_id=${room.id}`)
+        placements = res.data
+      }
+      const sqft = room ? room.width_ft * room.length_ft : 0
+      const usedSqft = placements.reduce((s, p) => s + (p.footprint_ft * p.footprint_ft), 0)
+      const freeSqft = Math.max(0, sqft - usedSqft)
+      const pctUsed = sqft > 0 ? Math.min(100, Math.round(usedSqft / sqft * 100)) : 0
+
+      body.innerHTML = `
+        <div class="space-y-4">
+          <div class="flex flex-col lg:flex-row lg:items-center gap-3 justify-between">
+            <div class="flex items-center gap-2 flex-wrap">
+              <select id="space-room-select" class="bg-slate-700/50 border border-slate-600 rounded-xl px-3 py-2 text-sm text-slate-200 min-w-[220px]">
+                ${rooms.map(r => `<option value="${r.id}" ${r.id === state.spaceRoomId ? 'selected' : ''}>${r.name} · ${r.width_ft}×${r.length_ft} ft (${r.campus})</option>`).join('')}
+              </select>
+              <button id="space-add-room" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-3 py-2 rounded-xl text-sm transition"><i class="fas fa-plus mr-1"></i>Room</button>
+              ${room ? `<button id="space-edit-room" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-3 py-2 rounded-xl text-sm transition"><i class="fas fa-cog mr-1"></i>Configure</button>` : ''}
+            </div>
+            ${room ? `<button id="space-add-placement" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition btn-glow"><i class="fas fa-plus mr-1"></i>Place Equipment</button>` : ''}
+          </div>
+
+          ${room ? `
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div class="glass-card rounded-xl p-4"><div class="text-xs text-slate-500">Room Area</div><div class="text-lg font-extrabold">${sqft.toLocaleString()} sq ft</div><div class="text-xs text-slate-500">${room.width_ft} ft × ${room.length_ft} ft</div></div>
+            <div class="glass-card rounded-xl p-4"><div class="text-xs text-slate-500">Allocated Footprint</div><div class="text-lg font-extrabold text-indigo-400">${usedSqft.toLocaleString()} sq ft</div><div class="text-xs text-slate-500">${placements.length} item${placements.length === 1 ? '' : 's'}</div></div>
+            <div class="glass-card rounded-xl p-4"><div class="text-xs text-slate-500">Free Floor Area</div><div class="text-lg font-extrabold text-emerald-400">${freeSqft.toLocaleString()} sq ft</div><div class="text-xs text-slate-500">${100 - pctUsed}% available</div></div>
+            <div class="glass-card rounded-xl p-4"><div class="text-xs text-slate-500 mb-1">Floor Utilization</div><div class="w-full bg-slate-700/50 rounded-full h-2.5 mt-2"><div class="h-2.5 rounded-full bg-gradient-to-r from-indigo-500 to-cyan-400" style="width:${pctUsed}%"></div></div><div class="text-xs text-slate-400 mt-1.5">${pctUsed}% used</div></div>
+          </div>
+          <div id="space-3d" class="glass-card rounded-2xl relative" style="height:520px;">
+            <div class="absolute top-3 left-3 z-10 text-xs text-slate-400 bg-slate-900/60 rounded-lg px-3 py-1.5 border border-slate-700/50 pointer-events-none"><i class="fas fa-arrows-alt mr-1"></i>Drag to orbit · scroll to zoom · click an object to edit</div>
+          </div>
+          <div class="glass-card rounded-2xl p-4 overflow-x-auto">
+            <div class="flex items-center justify-between mb-3"><h3 class="font-semibold text-sm"><i class="fas fa-list mr-1.5 text-indigo-400"></i>Placements in ${room.name}</h3><span class="text-xs text-slate-500">footprint = square side in ft</span></div>
+            <table class="w-full text-sm min-w-[720px]">
+              <thead><tr class="text-xs text-slate-500 border-b border-slate-700/50">
+                <th class="text-left py-2 pr-3">Item</th><th class="text-left py-2 pr-3">Category</th><th class="text-right py-2 pr-3">Footprint</th><th class="text-right py-2 pr-3">Position (x,y ft)</th><th class="text-right py-2 pr-3">Height</th><th class="text-left py-2 pr-3">Status</th><th class="text-right py-2">Actions</th>
+              </tr></thead>
+              <tbody>${placements.length === 0 ? '<tr><td colspan="7" class="text-center text-slate-500 py-6">No equipment placed yet — click “Place Equipment”.</td></tr>' : placements.map(p => `
+                <tr class="border-b border-slate-800/60 hover:bg-slate-800/30 transition">
+                  <td class="py-2.5 pr-3"><span class="inline-block w-3 h-3 rounded-sm mr-2 align-middle" style="background:${p.color}"></span><span class="font-medium">${p.item_name}</span>${p.notes ? `<div class="text-[11px] text-slate-500 ml-5">${p.notes}</div>` : ''}</td>
+                  <td class="py-2.5 pr-3 text-slate-400 capitalize">${(p.category || '').replace(/_/g, ' ')}</td>
+                  <td class="py-2.5 pr-3 text-right">${p.footprint_ft}×${p.footprint_ft} ft <span class="text-slate-500">(${p.footprint_ft * p.footprint_ft} sf)</span></td>
+                  <td class="py-2.5 pr-3 text-right text-slate-400">${p.x_ft}, ${p.y_ft}</td>
+                  <td class="py-2.5 pr-3 text-right text-slate-400">${p.height_ft} ft</td>
+                  <td class="py-2.5 pr-3 capitalize ${SPACE_STATUS_COLORS[p.status] || 'text-slate-400'}">${p.status}</td>
+                  <td class="py-2.5 text-right whitespace-nowrap">
+                    <button class="space-edit-p text-xs bg-slate-700/50 hover:bg-slate-600 border border-slate-700 px-2.5 py-1 rounded-lg transition mr-1" data-id="${p.id}"><i class="fas fa-pen"></i></button>
+                    <button class="space-del-p text-xs bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 px-2.5 py-1 rounded-lg transition" data-id="${p.id}"><i class="fas fa-trash"></i></button>
+                  </td>
+                </tr>`).join('')}</tbody>
+            </table>
+          </div>` : `
+          <div class="glass-card rounded-2xl p-10 text-center">
+            <i class="fas fa-drafting-compass text-3xl text-indigo-400/60 mb-3"></i>
+            <p class="text-slate-300 font-medium mb-1">No rooms configured yet</p>
+            <p class="text-sm text-slate-500 mb-4">Create a room with its width × length in feet, then place equipment with square footprints.</p>
+            <button id="space-add-room-empty" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition btn-glow"><i class="fas fa-plus mr-1"></i>Create First Room</button>
+          </div>`}
+        </div>`
+
+      $('#space-room-select')?.addEventListener('change', (e) => { state.spaceRoomId = Number(e.target.value); renderSpacePlanner() })
+      $('#space-add-room')?.addEventListener('click', () => openRoomForm())
+      $('#space-add-room-empty')?.addEventListener('click', () => openRoomForm())
+      $('#space-edit-room')?.addEventListener('click', () => openRoomForm(room))
+      $('#space-add-placement')?.addEventListener('click', () => openPlacementForm(room))
+      $$('.space-edit-p').forEach(b => b.addEventListener('click', () => openPlacementForm(room, placements.find(p => p.id === Number(b.dataset.id)))))
+      $$('.space-del-p').forEach(b => b.addEventListener('click', async () => {
+        const p = placements.find(x => x.id === Number(b.dataset.id))
+        if (!confirm(`Remove "${p?.item_name}" from the layout?`)) return
+        await API.delete(`/space/placements/${b.dataset.id}`)
+        toast('Placement removed', 'success')
+        renderSpacePlanner()
+      }))
+
+      if (room) initSpacePlanner3D(room, placements)
+    } catch (e) {
+      body.innerHTML = errorHtml('space planner', e)
+    }
+  }
+
+  function openRoomForm(room) {
+    showModal(`
+      <form id="room-form" class="space-y-4 text-left">
+        <h3 class="text-lg font-bold"><i class="fas fa-door-open text-indigo-400 mr-2"></i>${room ? 'Configure Room' : 'New Room'}</h3>
+        <div><label class="text-xs text-slate-400">Room Name <span class="text-amber-400">*</span></label><input name="name" required value="${room?.name || ''}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100" placeholder="e.g., Fabrication Lab A"></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="text-xs text-slate-400">Campus</label><select name="campus" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">
+            <option value="ramapuram" ${room?.campus === 'ramapuram' ? 'selected' : ''}>Ramapuram</option>
+            <option value="trichy" ${room?.campus === 'trichy' ? 'selected' : ''}>Trichy</option>
+          </select></div>
+          <div><label class="text-xs text-slate-400">Room Type</label><select name="room_type" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">
+            ${['lab', 'fabrication', 'flight_ops', 'workshop', 'storage', 'classroom', 'office'].map(t => `<option value="${t}" ${room?.room_type === t ? 'selected' : ''}>${t.replace(/_/g, ' ')}</option>`).join('')}
+          </select></div>
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          <div><label class="text-xs text-slate-400">Width (ft)</label><input name="width_ft" type="number" min="5" max="500" step="0.5" required value="${room?.width_ft || 40}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+          <div><label class="text-xs text-slate-400">Length (ft)</label><input name="length_ft" type="number" min="5" max="500" step="0.5" required value="${room?.length_ft || 30}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+          <div><label class="text-xs text-slate-400">Area</label><div id="room-sqft" class="bg-slate-800/60 border border-slate-700/50 rounded-lg px-3 py-2 text-sm mt-1 text-indigo-400 font-semibold">${room ? (room.width_ft * room.length_ft).toLocaleString() : '1,200'} sq ft</div></div>
+        </div>
+        <div><label class="text-xs text-slate-400">Notes</label><textarea name="notes" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">${room?.notes || ''}</textarea></div>
+        <div class="flex gap-2">
+          <button type="submit" class="flex-1 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow">${room ? 'Save Room' : 'Create Room'}</button>
+          ${room ? '<button type="button" id="room-delete-btn" class="bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 px-4 py-2.5 rounded-lg text-sm transition"><i class="fas fa-trash"></i></button>' : ''}
+        </div>
+      </form>`)
+    const form = $('#room-form')
+    const syncSqft = () => { $('#room-sqft').textContent = (Number(form.width_ft.value || 0) * Number(form.length_ft.value || 0)).toLocaleString() + ' sq ft' }
+    form.width_ft.addEventListener('input', syncSqft)
+    form.length_ft.addEventListener('input', syncSqft)
+    $('#room-delete-btn')?.addEventListener('click', async () => {
+      if (!confirm(`Delete room "${room.name}" and all its placements?`)) return
+      await API.delete(`/space/rooms/${room.id}`)
+      state.spaceRoomId = 0
+      toast('Room deleted', 'success')
+      closeModal(); renderSpacePlanner()
+    })
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const fd = new FormData(form)
+      const payload = { name: fd.get('name'), campus: fd.get('campus'), room_type: fd.get('room_type'), width_ft: Number(fd.get('width_ft')), length_ft: Number(fd.get('length_ft')), notes: fd.get('notes') }
+      if (room) { await API.put(`/space/rooms/${room.id}`, payload); toast('Room updated', 'success') }
+      else { const { data } = await API.post('/space/rooms', payload); state.spaceRoomId = data.id; toast('Room created', 'success') }
+      closeModal(); renderSpacePlanner()
+    })
+  }
+
+  function openPlacementForm(room, p) {
+    if (!room) return
+    const catOpts = Object.keys(SPACE_CATEGORY_COLORS)
+    showModal(`
+      <form id="placement-form" class="space-y-4 text-left">
+        <h3 class="text-lg font-bold"><i class="fas fa-th-large text-indigo-400 mr-2"></i>${p ? 'Edit Placement' : 'Place Equipment'} <span class="text-xs text-slate-500 font-normal">in ${room.name} (${room.width_ft}×${room.length_ft} ft)</span></h3>
+        <div><label class="text-xs text-slate-400">Item Name <span class="text-amber-400">*</span></label><input name="item_name" required value="${p?.item_name || ''}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100" placeholder="e.g., Lathe Machine"></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="text-xs text-slate-400">Category</label><select name="category" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">
+            ${catOpts.map(c => `<option value="${c}" ${p?.category === c ? 'selected' : ''}>${c.replace(/_/g, ' ')}</option>`).join('')}
+          </select></div>
+          <div><label class="text-xs text-slate-400">Status</label><select name="status" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">
+            ${['planned', 'ordered', 'installed', 'operational'].map(s => `<option value="${s}" ${p?.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+          </select></div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="text-xs text-slate-400">Square Footprint — side (ft)</label><input name="footprint_ft" type="number" min="0.5" max="${Math.min(room.width_ft, room.length_ft)}" step="0.5" required value="${p?.footprint_ft || 4}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"><p class="text-[11px] text-slate-500 mt-0.5" id="fp-hint"></p></div>
+          <div><label class="text-xs text-slate-400">Height (ft)</label><input name="height_ft" type="number" min="0.5" max="30" step="0.5" required value="${p?.height_ft || 4}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="text-xs text-slate-400">X position (ft from left)</label><input name="x_ft" type="number" min="0" max="${room.width_ft}" step="0.5" required value="${p?.x_ft ?? 2}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+          <div><label class="text-xs text-slate-400">Y position (ft from top)</label><input name="y_ft" type="number" min="0" max="${room.length_ft}" step="0.5" required value="${p?.y_ft ?? 2}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+        </div>
+        <div><label class="text-xs text-slate-400">Color</label><input name="color" type="color" value="${p?.color || SPACE_CATEGORY_COLORS[p?.category] || '#6366f1'}" class="w-full h-10 bg-slate-700 border border-slate-600 rounded-lg px-1 py-1 mt-1"></div>
+        <div><label class="text-xs text-slate-400">Notes</label><textarea name="notes" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">${p?.notes || ''}</textarea></div>
+        <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow">${p ? 'Save Placement' : 'Add to Layout'}</button>
+      </form>`)
+    const form = $('#placement-form')
+    const fpHint = () => { const f = Number(form.footprint_ft.value || 0); $('#fp-hint').textContent = `= ${f}×${f} ft · ${(f * f).toLocaleString()} sq ft of floor` }
+    form.footprint_ft.addEventListener('input', fpHint); fpHint()
+    form.category.addEventListener('change', () => { if (!p) form.color.value = SPACE_CATEGORY_COLORS[form.category.value] || '#6366f1' })
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const fd = new FormData(form)
+      const fp = Number(fd.get('footprint_ft'))
+      let x = Number(fd.get('x_ft')), y = Number(fd.get('y_ft'))
+      // clamp so the footprint stays inside the room
+      x = Math.max(0, Math.min(room.width_ft - fp, x))
+      y = Math.max(0, Math.min(room.length_ft - fp, y))
+      const payload = { room_id: room.id, item_name: fd.get('item_name'), category: fd.get('category'), status: fd.get('status'), footprint_ft: fp, height_ft: Number(fd.get('height_ft')), x_ft: x, y_ft: y, color: fd.get('color'), notes: fd.get('notes') }
+      if (p) { await API.put(`/space/placements/${p.id}`, payload); toast('Placement updated', 'success') }
+      else { await API.post('/space/placements', payload); toast('Equipment placed in layout', 'success') }
+      closeModal(); renderSpacePlanner()
+    })
+  }
+
+  // 3D floor-layout renderer — 1 world unit = 1 foot, day/night aware
+  function initSpacePlanner3D(room, placements) {
+    const container = $('#space-3d')
+    if (!container || !window.THREE) return
+    container.querySelectorAll('canvas').forEach(c => c.remove())
+
+    const isDay = state.theme === 'day'
+    const W = container.clientWidth, H = container.clientHeight
+    const scene = new THREE.Scene()
+    scene.background = new THREE.Color(isDay ? 0xe8edf5 : 0x0f172a)
+
+    const maxDim = Math.max(room.width_ft, room.length_ft)
+    const camera = new THREE.PerspectiveCamera(50, W / H, 0.5, 2000)
+    const cx = room.width_ft / 2, cz = room.length_ft / 2
+    camera.position.set(cx + maxDim * 0.7, maxDim * 0.95, cz + maxDim * 0.85)
+    camera.lookAt(cx, 0, cz)
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true })
+    renderer.setSize(W, H)
+    renderer.shadowMap.enabled = true
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    container.appendChild(renderer.domElement)
+
+    scene.add(new THREE.AmbientLight(isDay ? 0xffffff : 0x8090b0, isDay ? 0.9 : 0.7))
+    const dir = new THREE.DirectionalLight(0xffffff, isDay ? 1.6 : 1.2)
+    dir.position.set(cx + 40, maxDim * 1.5, cz + 30)
+    dir.castShadow = true
+    dir.shadow.mapSize.set(2048, 2048)
+    const sc = dir.shadow.camera
+    sc.left = -maxDim; sc.right = maxDim; sc.top = maxDim; sc.bottom = -maxDim
+    scene.add(dir)
+
+    // Floor slab (room at real ft scale)
+    const floorGeo = new THREE.PlaneGeometry(room.width_ft, room.length_ft)
+    const floorMat = new THREE.MeshStandardMaterial({ color: isDay ? 0xf1f5f9 : 0x1e293b, roughness: 0.9, metalness: 0.05 })
+    const floor = new THREE.Mesh(floorGeo, floorMat)
+    floor.rotation.x = -Math.PI / 2
+    floor.position.set(cx, 0, cz)
+    floor.receiveShadow = true
+    scene.add(floor)
+
+    // Perimeter walls (semi-transparent, 8 ft)
+    const wallMat = new THREE.MeshStandardMaterial({ color: isDay ? 0xcbd5e1 : 0x334155, transparent: true, opacity: 0.35, roughness: 0.8 })
+    const wallH = 8
+    const mkWall = (w, d, x, z) => {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, wallH, d), wallMat)
+      wall.position.set(x, wallH / 2, z)
+      scene.add(wall)
+    }
+    mkWall(room.width_ft, 0.4, cx, 0)
+    mkWall(room.width_ft, 0.4, cx, room.length_ft)
+    mkWall(0.4, room.length_ft, 0, cz)
+    mkWall(0.4, room.length_ft, room.width_ft, cz)
+
+    // Grid in feet
+    const grid = new THREE.GridHelper(maxDim, Math.round(maxDim / 2), isDay ? 0x94a3b8 : 0x334155, isDay ? 0xd7dee9 : 0x1e293b)
+    grid.position.set(cx, 0.02, cz)
+    scene.add(grid)
+
+    // Equipment boxes with square footprints
+    const meshes = []
+    placements.forEach(p => {
+      const fp = Number(p.footprint_ft) || 1
+      const geo = new THREE.BoxGeometry(fp, Number(p.height_ft) || 3, fp)
+      const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(p.color || '#6366f1'), roughness: 0.45, metalness: 0.15, transparent: true, opacity: 0.92 })
+      const mesh = new THREE.Mesh(geo, mat)
+      mesh.position.set(Number(p.x_ft) + fp / 2, (Number(p.height_ft) || 3) / 2, Number(p.y_ft) + fp / 2)
+      mesh.castShadow = true; mesh.receiveShadow = true
+      mesh.userData = { placement: p }
+      scene.add(mesh)
+      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: isDay ? 0x0f172a : 0xffffff, transparent: true, opacity: 0.35 }))
+      edges.position.copy(mesh.position)
+      scene.add(edges)
+      meshes.push(mesh)
+
+      // Floating label sprite
+      const cv = document.createElement('canvas')
+      cv.width = 512; cv.height = 128
+      const ctx = cv.getContext('2d')
+      ctx.fillStyle = isDay ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.85)'
+      ctx.strokeStyle = p.color || '#6366f1'
+      ctx.lineWidth = 4
+      ctx.beginPath(); ctx.roundRect(6, 6, 500, 116, 18); ctx.fill(); ctx.stroke()
+      ctx.fillStyle = isDay ? '#0f172a' : '#e2e8f0'
+      ctx.font = 'bold 40px sans-serif'; ctx.textAlign = 'center'
+      ctx.fillText(p.item_name, 256, 58, 470)
+      ctx.fillStyle = isDay ? '#64748b' : '#94a3b8'
+      ctx.font = '30px sans-serif'
+      ctx.fillText(`${fp}×${fp} ft`, 256, 100)
+      const tex = new THREE.CanvasTexture(cv)
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }))
+      sprite.scale.set(fp * 1.6, fp * 0.4, 1)
+      sprite.position.set(mesh.position.x, (Number(p.height_ft) || 3) + Math.max(1.6, fp * 0.28), mesh.position.z)
+      scene.add(sprite)
+    })
+
+    // Click to edit placement
+    const raycaster = new THREE.Raycaster()
+    const mouse = new THREE.Vector2()
+    let downAt = null
+    container.addEventListener('mousedown', (e) => { downAt = { x: e.clientX, y: e.clientY } })
+    container.addEventListener('mouseup', (e) => {
+      if (!downAt || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 5) { downAt = null; return }
+      downAt = null
+      const rect = container.getBoundingClientRect()
+      mouse.x = ((e.clientX - rect.left) / W) * 2 - 1
+      mouse.y = -((e.clientY - rect.top) / H) * 2 + 1
+      raycaster.setFromCamera(mouse, camera)
+      const hits = raycaster.intersectObjects(meshes)
+      if (hits.length) openPlacementForm(room, hits[0].object.userData.placement)
+    })
+    // Hover highlight
+    container.addEventListener('mousemove', (e) => {
+      const rect = container.getBoundingClientRect()
+      mouse.x = ((e.clientX - rect.left) / W) * 2 - 1
+      mouse.y = -((e.clientY - rect.top) / H) * 2 + 1
+      raycaster.setFromCamera(mouse, camera)
+      const hits = raycaster.intersectObjects(meshes)
+      meshes.forEach(m => m.material.emissive.set(0x000000))
+      if (hits.length) { hits[0].object.material.emissive.set(0x333333); container.style.cursor = 'pointer' }
+      else container.style.cursor = 'grab'
+    })
+
+    // Orbit around room center + zoom
+    let isDragging = false, prevX = 0, prevY = 0, angle = Math.atan2(camera.position.z - cz, camera.position.x - cx), radius = Math.hypot(camera.position.x - cx, camera.position.z - cz), camY = camera.position.y
+    container.addEventListener('mousedown', (e) => { isDragging = true; prevX = e.clientX; prevY = e.clientY })
+    window.addEventListener('mouseup', () => { isDragging = false })
+    window.addEventListener('mousemove', (e) => {
+      if (!isDragging || state.activeView !== 'facility') return
+      const dx = e.clientX - prevX, dy = e.clientY - prevY
+      angle -= dx * 0.008
+      camY = Math.max(maxDim * 0.2, Math.min(maxDim * 2.2, camY + dy * 0.25))
+      camera.position.set(cx + radius * Math.cos(angle), camY, cz + radius * Math.sin(angle))
+      camera.lookAt(cx, 0, cz)
+      prevX = e.clientX; prevY = e.clientY
+    })
+    container.addEventListener('wheel', (e) => {
+      e.preventDefault()
+      radius = Math.max(maxDim * 0.5, Math.min(maxDim * 3, radius + e.deltaY * 0.08))
+      camera.position.set(cx + radius * Math.cos(angle), camY, cz + radius * Math.sin(angle))
+      camera.lookAt(cx, 0, cz)
+    }, { passive: false })
+
+    function animate() {
+      if (state.activeView !== 'facility' || state.facilityMode !== 'planner') return
+      if (!document.body.contains(renderer.domElement)) return
+      requestAnimationFrame(animate)
+      renderer.render(scene, camera)
+    }
+    animate()
   }
 
   async function initThreeJS() {
@@ -865,6 +1272,7 @@
             <div><h2 class="text-xl font-bold">Reports</h2><p class="text-sm text-slate-400">Daily / Weekly / Monthly Reporting</p></div>
             <div class="flex gap-2">
               ${!isVenture ? '<button id="new-daily-btn" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition btn-glow"><i class="fas fa-plus mr-1"></i> Daily Update</button>' : ''}
+              <button id="report-email-btn" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-4 py-2 rounded-xl text-sm font-medium transition"><i class="fas fa-envelope mr-1"></i> Email Report</button>
               <button id="export-csv-btn" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-4 py-2 rounded-xl text-sm font-medium transition"><i class="fas fa-download mr-1"></i> Export KPI CSV</button>
             </div>
           </div>
@@ -888,6 +1296,7 @@
       })
 
       if (!isVenture) $('#new-daily-btn').addEventListener('click', () => openDailyReportForm())
+      $('#report-email-btn').addEventListener('click', () => openEmailShareModal('report'))
       $('#export-csv-btn').addEventListener('click', () => downloadCSV('kpis'))
 
       gsap.from('#report-content-area > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.08 })
@@ -1341,6 +1750,7 @@
                 <div class="text-xs text-slate-500">Overall Setup Progress</div>
                 <div class="text-lg font-extrabold bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">${tracker.overall_progress}%</div>
               </div>
+              <button id="setup-email-btn" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-4 py-2 rounded-xl text-sm font-medium transition"><i class="fas fa-envelope mr-1"></i> Email</button>
               <button id="setup-export-btn" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-4 py-2 rounded-xl text-sm font-medium transition"><i class="fas fa-download mr-1"></i> Export CSV</button>
             </div>
           </div>
@@ -1355,6 +1765,7 @@
         renderSetupTracker()
       }))
       $('#setup-export-btn').addEventListener('click', () => window.open('/api/tracker/export/csv', '_blank'))
+      $('#setup-email-btn').addEventListener('click', () => openEmailShareModal('tracker'))
 
       switch (state.setupTab) {
         case 'reviewq': renderSetupReviewQueue(isVenture); break
@@ -2138,6 +2549,76 @@
   function downloadCSV(type) {
     window.open(`/api/export/csv/${type}`, '_blank')
   }
+
+  // ── EMAIL SHARE — send formatted report via Resend ───────
+  function openEmailShareModal(defaultScope = 'report') {
+    const scopes = [
+      { id: 'tracker', label: 'Full Setup Report (stages, sections, line items)' },
+      { id: 'report', label: 'KPI Scorecard & Setup Summary' },
+      { id: 'kpis', label: 'KPI Scorecard Only' },
+      { id: 'procurement', label: 'Procurement Pipeline' }
+    ]
+    showModal(`
+      <form id="email-share-form" class="space-y-4 text-left">
+        <div class="flex items-center justify-between">
+          <h3 class="text-lg font-bold"><i class="fas fa-envelope text-indigo-400 mr-2"></i>Share via Email</h3>
+          <button type="button" id="email-preview-btn" class="text-xs bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-3 py-1.5 rounded-lg transition"><i class="fas fa-eye mr-1"></i>Preview</button>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400">Recipients <span class="text-amber-400">*</span> <span class="text-slate-500">(comma or newline separated)</span></label>
+          <textarea name="to" rows="2" required class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500" placeholder="director@srm.edu, venture@srm.edu"></textarea>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400">Report Content</label>
+          <select name="scope" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">
+            ${scopes.map(s => `<option value="${s.id}" ${s.id === defaultScope ? 'selected' : ''}>${s.label}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400">Note to include <span class="text-slate-500">(optional)</span></label>
+          <textarea name="note" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500" placeholder="e.g., Please review before Friday's steering call"></textarea>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400">Resend API Key <span class="text-amber-400">*</span> <span class="text-slate-500">(session only, never stored)</span></label>
+          <input name="api_key" type="password" required value="${state.emailApiKey || ''}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500" placeholder="re_...">
+          <p class="text-[11px] text-slate-500 mt-1"><i class="fas fa-info-circle mr-1"></i>Free-tier Resend (<code>onboarding@resend.dev</code> sender) only delivers to the email address that owns the API key. Verify a domain at resend.com to send to anyone.</p>
+        </div>
+        <div id="email-share-status" class="hidden text-sm rounded-lg px-3 py-2"></div>
+        <button type="submit" id="email-send-btn" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow"><i class="fas fa-paper-plane mr-1"></i>Send Formatted Report</button>
+      </form>`)
+
+    const form = $('#email-share-form')
+    $('#email-preview-btn').addEventListener('click', () => {
+      window.open(`/api/email/preview?scope=${form.scope.value}`, '_blank')
+    })
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const fd = new FormData(form)
+      const to = String(fd.get('to') || '').split(/[,\n]+/).map(s => s.trim()).filter(Boolean)
+      const scope = fd.get('scope')
+      const note = fd.get('note')
+      const api_key = String(fd.get('api_key') || '').trim()
+      state.emailApiKey = api_key // session-only memory
+      const status = $('#email-share-status')
+      const btn = $('#email-send-btn')
+      btn.disabled = true
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Sending...'
+      try {
+        const { data } = await API.post('/email/send', { to, scope, note, api_key })
+        status.className = 'text-sm rounded-lg px-3 py-2 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+        status.textContent = `Sent to ${data.sent_to.join(', ')}`
+        toast('Email sent successfully!', 'success')
+        setTimeout(closeModal, 1200)
+      } catch (err) {
+        const msg = err.response?.data?.error || err.message
+        status.className = 'text-sm rounded-lg px-3 py-2 bg-red-500/15 text-red-400 border border-red-500/30'
+        status.textContent = msg
+        btn.disabled = false
+        btn.innerHTML = '<i class="fas fa-paper-plane mr-1"></i>Send Formatted Report'
+      }
+    })
+  }
+  window._openEmailShare = openEmailShareModal
 
   // ── SHARE REPORT ─────────────────────────────────────────
   window._shareReport = async (title, content) => {
