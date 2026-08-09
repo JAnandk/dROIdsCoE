@@ -540,6 +540,143 @@ Data context: ${JSON.stringify(context, null, 2)}`
 })
 
 // ============================================================
+// WORKFLOW SUBMISSIONS — CoE Leader submits, Venture Owner reviews/approves
+// ============================================================
+app.post('/api/submissions/kpi', async (c) => {
+  const { kpi_id, kra_id, current_value, previous_value, notes } = await c.req.json()
+  const result = await c.env.DB.prepare(
+    `INSERT INTO kpi_submissions (kpi_id, kra_id, current_value, previous_value, status, notes, submitted_by)
+     VALUES (?, ?, ?, ?, 'pending_review', ?, 'coe_leader')`
+  ).bind(kpi_id, kra_id, current_value, previous_value || 0, notes || '').run()
+  return c.json({ ok: true, id: result.meta.last_row_id })
+})
+
+app.get('/api/submissions', async (c) => {
+  const status = c.req.query('status')
+  let rows
+  if (status) {
+    rows = await c.env.DB.prepare(
+      `SELECT s.*, kpis.title as kpi_title, kpis.metric_unit, kpis.target_value,
+              kras.title as kra_title
+       FROM kpi_submissions s
+       JOIN kpis ON s.kpi_id = kpis.id
+       JOIN kras ON s.kra_id = kras.id
+       WHERE s.status = ?
+       ORDER BY s.created_at DESC LIMIT 100`
+    ).bind(status).all()
+  } else {
+    rows = await c.env.DB.prepare(
+      `SELECT s.*, kpis.title as kpi_title, kpis.metric_unit, kpis.target_value,
+              kras.title as kra_title
+       FROM kpi_submissions s
+       JOIN kpis ON s.kpi_id = kpis.id
+       JOIN kras ON s.kra_id = kras.id
+       ORDER BY s.created_at DESC LIMIT 100`
+    ).all()
+  }
+  return c.json(rows.results)
+})
+
+app.put('/api/submissions/:id', async (c) => {
+  const id = c.req.param('id')
+  const { action, current_value, reviewer_notes } = await c.req.json()
+  const db = c.env.DB
+
+  const sub = await db.prepare('SELECT * FROM kpi_submissions WHERE id = ?').bind(id).first<{
+    id: number; kpi_id: number; kra_id: number; current_value: number; status: string
+  }>()
+
+  if (!sub) return c.json({ error: 'Submission not found' }, 404)
+
+  if (action === 'approve') {
+    // Update the KPI record with the submitted value
+    await db.prepare(
+      `UPDATE kpis SET current_value = ?, status = 'completed', updated_at = datetime('now') WHERE id = ?`
+    ).bind(sub.current_value, sub.kpi_id).run()
+
+    // Update submission status
+    await db.prepare(
+      `UPDATE kpi_submissions SET status = 'approved', reviewer_notes = ?,
+       reviewed_by = 'venture_owner', reviewed_at = datetime('now') WHERE id = ?`
+    ).bind(reviewer_notes || '', id).run()
+  } else if (action === 'reject') {
+    await db.prepare(
+      `UPDATE kpi_submissions SET status = 'rejected', reviewer_notes = ?,
+       reviewed_by = 'venture_owner', reviewed_at = datetime('now') WHERE id = ?`
+    ).bind(reviewer_notes || 'Needs revision', id).run()
+  } else if (action === 'edit') {
+    // Venture Owner edits the submission (modifies the value before approving)
+    await db.prepare(
+      `UPDATE kpi_submissions SET current_value = ?, reviewer_notes = ?, status = 'pending_review'
+       WHERE id = ?`
+    ).bind(current_value, reviewer_notes || '', id).run()
+  } else {
+    return c.json({ error: 'Invalid action. Use: approve, reject, or edit' }, 400)
+  }
+
+  return c.json({ ok: true })
+})
+
+// Report submissions workflow
+app.post('/api/submissions/report', async (c) => {
+  const { report_type, report_id, content_json, notes } = await c.req.json()
+  const result = await c.env.DB.prepare(
+    `INSERT INTO report_submissions (report_type, report_id, content_json, status, notes, submitted_by)
+     VALUES (?, ?, ?, 'pending_review', ?, 'coe_leader')`
+  ).bind(report_type, report_id, JSON.stringify(content_json), notes || '').run()
+  return c.json({ ok: true, id: result.meta.last_row_id })
+})
+
+app.get('/api/submissions/report', async (c) => {
+  const status = c.req.query('status')
+  let rows
+  if (status) {
+    rows = await c.env.DB.prepare(
+      `SELECT * FROM report_submissions WHERE status = ? ORDER BY created_at DESC LIMIT 50`
+    ).bind(status).all()
+  } else {
+    rows = await c.env.DB.prepare(
+      `SELECT * FROM report_submissions ORDER BY created_at DESC LIMIT 50`
+    ).all()
+  }
+  const results = (rows.results as any[]).map(r => ({
+    ...r,
+    content_json: typeof r.content_json === 'string' ? JSON.parse(r.content_json) : r.content_json
+  }))
+  return c.json(results)
+})
+
+app.put('/api/submissions/report/:id', async (c) => {
+  const id = c.req.param('id')
+  const { action, reviewer_notes } = await c.req.json()
+
+  const sub = await c.env.DB.prepare('SELECT * FROM report_submissions WHERE id = ?').bind(id).first<{
+    id: number; report_type: string; report_id: number; status: string
+  }>()
+  if (!sub) return c.json({ error: 'Submission not found' }, 404)
+
+  if (action === 'approve') {
+    await c.env.DB.prepare(
+      `UPDATE report_submissions SET status = 'approved', reviewer_notes = ?,
+       reviewed_by = 'venture_owner', reviewed_at = datetime('now') WHERE id = ?`
+    ).bind(reviewer_notes || '', id).run()
+    // Also update the original report status
+    const table = sub.report_type === 'daily' ? 'daily_updates' :
+                  sub.report_type === 'weekly' ? 'weekly_reports' : 'monthly_reports'
+    await c.env.DB.prepare(`UPDATE ${table} SET status = 'approved' WHERE id = ?`).bind(sub.report_id).run()
+  } else if (action === 'reject') {
+    await c.env.DB.prepare(
+      `UPDATE report_submissions SET status = 'rejected', reviewer_notes = ?,
+       reviewed_by = 'venture_owner', reviewed_at = datetime('now') WHERE id = ?`
+    ).bind(reviewer_notes || 'Needs revision', id).run()
+  } else {
+    return c.json({ error: 'Invalid action. Use: approve or reject' }, 400)
+  }
+
+  return c.json({ ok: true })
+})
+
+// ============================================================
 // EXPORT / DOWNLOAD
 // ============================================================
 app.get('/api/export/csv/:type', async (c) => {
@@ -634,15 +771,50 @@ const SPA_HTML = `<!DOCTYPE html>
       theme: {
         extend: {
           colors: {
-            brand: { 50:'#eef2ff',100:'#e0e7ff',200:'#c7d2fe',300:'#a5b4fc',400:'#818cf8',500:'#6366f1',600:'#4f46e5',700:'#4338ca',800:'#3730a3',900:'#312e81' }
+            brand: { 50:'#eef2ff',100:'#e0e7ff',200:'#c7d2fe',300:'#a5b4fc',400:'#818cf8',500:'#6366f1',600:'#4f46e5',700:'#4338ca',800:'#3730a3',900:'#312e81' },
+            drone: { 50:'#f0f9ff',100:'#e0f2fe',200:'#bae6fd',300:'#7dd3fc',400:'#38bdf8',500:'#0ea5e9',600:'#0284c7',700:'#0369a1',800:'#075985',900:'#0c4a6e' }
           }
         }
       }
     }
   </script>
+  <style id="srm-inline-hero">
+    .hero-bg { background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 30%, #0f172a 60%, #0c1929 100%); }
+    .hero-bg::before {
+      content: ''; position: fixed; inset: 0; z-index: 0; opacity: 0.12;
+      background: radial-gradient(ellipse 80% 50% at 50% -10%, #6366f1, transparent),
+                  radial-gradient(ellipse 60% 40% at 80% 80%, #06b6d4, transparent),
+                  radial-gradient(ellipse 50% 60% at 20% 50%, #8b5cf6, transparent);
+      pointer-events: none;
+    }
+    .glass-card {
+      background: rgba(15,23,42,0.75); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(148,163,184,0.1); box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    .glass-card:hover { border-color: rgba(99,102,241,0.3); box-shadow: 0 12px 40px rgba(99,102,241,0.15); }
+    .glow-text { text-shadow: 0 0 20px rgba(99,102,241,0.5), 0 0 40px rgba(99,102,241,0.2); }
+    .drone-hero-overlay {
+      position: fixed; inset: 0; z-index: 0; opacity: 0.08; pointer-events: none;
+      background-image: url('https://images.unsplash.com/photo-1508614589041-895b88991e3e?w=1920&q=80');
+      background-size: cover; background-position: center;
+    }
+    .grid-pattern { background-image: radial-gradient(rgba(99,102,241,0.1) 1px, transparent 1px); background-size: 30px 30px; }
+    .status-pending_review { background: rgba(251,191,36,0.2); color: #fbbf24; }
+    .status-approved { background: rgba(52,211,153,0.2); color: #34d399; }
+    .status-rejected { background: rgba(248,113,113,0.2); color: #f87171; }
+    .btn-glow { box-shadow: 0 0 20px rgba(99,102,241,0.3); }
+    .btn-glow:hover { box-shadow: 0 0 30px rgba(99,102,241,0.5), 0 0 60px rgba(99,102,241,0.15); }
+    .toast { animation: slideIn 0.4s ease, slideOut 0.4s ease 3s forwards; }
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes slideOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
+    @keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+    .float-anim { animation: float 4s ease-in-out infinite; }
+  </style>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen font-sans antialiased">
-  <div id="app-root"></div>
+<body class="hero-bg grid-pattern text-slate-100 min-h-screen font-sans antialiased">
+  <div class="drone-hero-overlay"></div>
+  <div id="app-root" class="relative z-10"></div>
+  <div id="toast-container" class="fixed top-4 right-4 z-50 space-y-2"></div>
   <script src="/static/app.js"></script>
 </body>
 </html>`

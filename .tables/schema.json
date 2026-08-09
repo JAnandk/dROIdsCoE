@@ -185,6 +185,39 @@
         {"name": "status", "type": "TEXT", "default": "pending"},
         {"name": "sort_order", "type": "INTEGER", "default": 0}
       ]
+    },
+    {
+      "name": "kpi_submissions",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "primary_key": true},
+        {"name": "kpi_id", "type": "INTEGER", "not_null": true, "references": "kpis(id)"},
+        {"name": "kra_id", "type": "INTEGER", "not_null": true, "references": "kras(id)"},
+        {"name": "current_value", "type": "REAL", "not_null": true},
+        {"name": "previous_value", "type": "REAL"},
+        {"name": "status", "type": "TEXT", "not_null": true, "default": "pending_review"},
+        {"name": "notes", "type": "TEXT"},
+        {"name": "reviewer_notes", "type": "TEXT"},
+        {"name": "submitted_by", "type": "TEXT", "default": "coe_leader"},
+        {"name": "reviewed_by", "type": "TEXT"},
+        {"name": "reviewed_at", "type": "DATETIME"},
+        {"name": "created_at", "type": "DATETIME", "default": "CURRENT_TIMESTAMP"}
+      ]
+    },
+    {
+      "name": "report_submissions",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "primary_key": true},
+        {"name": "report_type", "type": "TEXT", "not_null": true},
+        {"name": "report_id", "type": "INTEGER", "not_null": true},
+        {"name": "content_json", "type": "TEXT", "not_null": true},
+        {"name": "status", "type": "TEXT", "not_null": true, "default": "pending_review"},
+        {"name": "notes", "type": "TEXT"},
+        {"name": "reviewer_notes", "type": "TEXT"},
+        {"name": "submitted_by", "type": "TEXT", "default": "coe_leader"},
+        {"name": "reviewed_by", "type": "TEXT"},
+        {"name": "reviewed_at", "type": "DATETIME"},
+        {"name": "created_at", "type": "DATETIME", "default": "CURRENT_TIMESTAMP"}
+      ]
     }
   ],
   "seed": {

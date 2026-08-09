@@ -1,17 +1,20 @@
 // ============================================================================
-// SRM dROIds — CoE Mission Tracker — Full SPA
+// SRM dROIds — CoE Mission Tracker — Premium SPA v2
+// Workflows: CoE Director submits → Venture Owner reviews/edits/approves
+// Premium UX: glassmorphism, hero imagery, hidden passcodes
 // ============================================================================
 (function () {
   'use strict'
 
   let state = {
-    role: null, // 'coe_leader' | 'venture_owner'
+    role: null,
     passcode: null,
     activeView: 'dashboard',
     llmApiKey: null,
     charts: {},
     threeScene: null,
-    facilityCampus: 'ramapuram'
+    facilityCampus: 'ramapuram',
+    reviewFilter: 'pending_review'
   }
 
   const API = axios.create({ baseURL: '/api' })
@@ -19,9 +22,21 @@
   const $$ = (s) => document.querySelectorAll(s)
   const root = $('#app-root')
 
-  // ============================================================
-  // INIT
-  // ============================================================
+  // ── TOAST ────────────────────────────────────────────────
+  function toast(msg, type = 'success') {
+    const container = $('#toast-container')
+    const colors = { success: 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300',
+                     error: 'bg-red-500/20 border-red-500/40 text-red-300',
+                     info: 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300' }
+    const icons = { success: 'fa-check-circle', error: 'fa-exclamation-circle', info: 'fa-info-circle' }
+    const el = document.createElement('div')
+    el.className = `toast ${colors[type]} border rounded-xl px-4 py-3 text-sm flex items-center gap-2 shadow-lg backdrop-blur`
+    el.innerHTML = `<i class="fas ${icons[type]}"></i> ${msg}`
+    container.appendChild(el)
+    setTimeout(() => { if (el.parentNode) el.remove() }, 3600)
+  }
+
+  // ── INIT ─────────────────────────────────────────────────
   async function init() {
     const hash = window.location.hash
     if (hash.startsWith('#share/')) {
@@ -31,34 +46,40 @@
     renderLogin()
   }
 
-  // ============================================================
-  // LOGIN SCREEN
-  // ============================================================
+  // ── PREMIUM LOGIN SCREEN — passcodes hidden ──────────────
   function renderLogin() {
     root.innerHTML = `
-      <main class="min-h-screen flex items-center justify-center p-6">
-        <section class="w-full max-w-md">
-          <header class="text-center mb-10">
-            <div class="text-6xl mb-4">🛸</div>
-            <h1 class="text-3xl font-bold bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">
-              SRM dROIds
-            </h1>
-            <p class="text-slate-400 mt-2">CoE Mission Tracker &mdash; Dual-Campus Drone Innovation</p>
-          </header>
-          <form id="login-form" class="bg-slate-900 border border-slate-800 rounded-2xl p-8 space-y-6">
-            <div id="login-error" class="hidden bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm"></div>
-            <div>
-              <label class="block text-sm font-medium text-slate-400 mb-2">Access Passcode</label>
-              <input id="passcode-input" type="password" placeholder="Enter your passcode..."
-                class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition" autofocus>
+      <main class="min-h-screen flex items-center justify-center p-6 relative">
+        <section class="w-full max-w-md relative z-10">
+          <header class="text-center mb-8">
+            <div class="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-cyan-500/20 border border-indigo-500/30 mb-5 float-anim">
+              <i class="fas fa-drone text-3xl text-indigo-400"></i>
             </div>
-            <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 px-6 rounded-lg transition flex items-center justify-center gap-2">
-              <i class="fas fa-lock-open"></i> Enter Mission Control
+            <h1 class="text-3xl font-extrabold tracking-tight">
+              <span class="bg-gradient-to-r from-indigo-400 via-purple-400 to-cyan-400 bg-clip-text text-transparent glow-text">SRM dROIds</span>
+            </h1>
+            <p class="text-slate-400 mt-2 text-sm max-w-xs mx-auto">Dual-Campus Drone Centre of Excellence &mdash; Mission Control</p>
+            <div class="flex items-center justify-center gap-4 mt-4 text-xs text-slate-500">
+              <span class="flex items-center gap-1"><i class="fas fa-map-marker-alt text-indigo-400"></i> Ramapuram</span>
+              <span class="flex items-center gap-1"><i class="fas fa-map-marker-alt text-cyan-400"></i> Trichy</span>
+            </div>
+          </header>
+
+          <form id="login-form" class="glass-card rounded-2xl p-8 space-y-5">
+            <div id="login-error" class="hidden bg-red-500/10 border border-red-500/30 rounded-xl p-3 text-red-400 text-sm flex items-center gap-2">
+              <i class="fas fa-exclamation-triangle"></i> <span></span>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Access Passcode</label>
+              <div class="relative">
+                <i class="fas fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"></i>
+                <input id="passcode-input" type="password" placeholder="Enter your secure passcode..."
+                  class="w-full bg-slate-800/80 border border-slate-700 rounded-xl pl-10 pr-4 py-3.5 text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition text-sm" autofocus>
+              </div>
+            </div>
+            <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold py-3.5 px-6 rounded-xl transition btn-glow flex items-center justify-center gap-2 text-sm">
+              <i class="fas fa-rocket"></i> Enter Mission Control
             </button>
-            <p class="text-xs text-slate-600 text-center mt-4">
-              CoE Leader: <code class="bg-slate-800 px-1.5 py-0.5 rounded">dROIds2026!</code> &nbsp;|&nbsp;
-              Venture Owner: <code class="bg-slate-800 px-1.5 py-0.5 rounded">VentureSRM!26</code>
-            </p>
           </form>
         </section>
       </main>`
@@ -80,42 +101,48 @@
         showLoginError('Invalid passcode. Please try again.')
       }
     })
+
+    gsap.from('header', { y: -30, opacity: 0, duration: 0.7, ease: 'power2.out' })
+    gsap.from('#login-form', { y: 20, opacity: 0, duration: 0.5, delay: 0.2, ease: 'power2.out' })
   }
 
   function showLoginError(msg) {
     const el = $('#login-error')
-    el.textContent = msg
+    el.querySelector('span').textContent = msg
     el.classList.remove('hidden')
     gsap.from(el, { x: -10, opacity: 0, duration: 0.3 })
   }
 
-  // ============================================================
-  // MAIN APP SHELL
-  // ============================================================
+  // ── MAIN APP SHELL ───────────────────────────────────────
   function renderApp() {
     const isVenture = state.role === 'venture_owner'
+    const badgeClass = isVenture ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
+
     root.innerHTML = `
-      <nav id="main-nav" class="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
+      <nav id="main-nav" class="glass-card sticky top-0 z-50 border-t-0 border-x-0 rounded-none">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between h-16">
           <div class="flex items-center gap-3">
-            <span class="text-2xl">🛸</span>
-            <span class="font-bold text-lg hidden sm:inline bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">SRM dROIds</span>
-            <span class="text-xs px-2 py-0.5 rounded-full ${isVenture ? 'bg-amber-500/20 text-amber-400' : 'bg-indigo-500/20 text-indigo-400'}">
+            <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500/30 to-cyan-500/30 flex items-center justify-center">
+              <i class="fas fa-drone text-indigo-400 text-sm"></i>
+            </div>
+            <span class="font-bold text-base hidden sm:inline bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">SRM dROIds</span>
+            <span class="text-xs px-2.5 py-1 rounded-full font-medium ${badgeClass}">
               ${isVenture ? 'Venture Owner' : 'CoE Director'}
             </span>
           </div>
           <div class="flex items-center gap-1 sm:gap-2" id="nav-tabs"></div>
-          <button id="logout-btn" class="text-slate-500 hover:text-slate-300 px-3 py-2 rounded-lg hover:bg-slate-800 transition text-sm">
+          <button id="logout-btn" class="text-slate-500 hover:text-slate-300 px-3 py-2 rounded-xl hover:bg-slate-800/50 transition text-sm border border-transparent hover:border-slate-700/50">
             <i class="fas fa-sign-out-alt"></i> <span class="hidden sm:inline ml-1">Exit</span>
           </button>
         </div>
       </nav>
-      <main id="main-content" class="max-w-7xl mx-auto px-4 sm:px-6 py-6"></main>`
+      <main id="main-content" class="max-w-7xl mx-auto px-4 sm:px-6 py-8"></main>`
 
     // Build nav tabs
     const tabs = isVenture
       ? [
           { id: 'dashboard', icon: 'fa-chart-pie', label: 'Dashboard' },
+          { id: 'review', icon: 'fa-clipboard-check', label: 'Review' },
           { id: 'procurement', icon: 'fa-truck', label: 'Procurement' },
           { id: 'partners', icon: 'fa-handshake', label: 'Partners' },
           { id: 'reports', icon: 'fa-file-alt', label: 'Reports' },
@@ -133,8 +160,8 @@
     const navTabs = $('#nav-tabs')
     tabs.forEach(t => {
       const btn = document.createElement('button')
-      btn.className = `nav-tab px-3 py-2 rounded-lg text-sm font-medium transition ${t.id === state.activeView ? 'bg-indigo-600/20 text-indigo-400' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`
-      btn.innerHTML = `<i class="fas ${t.icon} mr-1"></i> <span class="hidden sm:inline">${t.label}</span>`
+      btn.className = `nav-tab px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200 ${t.id === state.activeView ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'}`
+      btn.innerHTML = `<i class="fas ${t.icon} mr-1.5"></i> <span class="hidden sm:inline">${t.label}</span>`
       btn.dataset.view = t.id
       navTabs.appendChild(btn)
     })
@@ -149,20 +176,21 @@
     })
 
     navigateView()
+    gsap.from('#main-nav', { y: -60, opacity: 0, duration: 0.5, ease: 'power2.out' })
   }
 
   function navigateView() {
-    // Update nav tab active state
     $$('.nav-tab').forEach(b => {
       const isActive = b.dataset.view === state.activeView
-      b.className = `nav-tab px-3 py-2 rounded-lg text-sm font-medium transition ${isActive ? 'bg-indigo-600/20 text-indigo-400' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`
+      b.className = `nav-tab px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200 ${isActive ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'}`
     })
 
     const content = $('#main-content')
-    content.innerHTML = '<div class="flex justify-center py-20"><i class="fas fa-spinner animate-spin text-2xl text-indigo-400"></i></div>'
+    content.innerHTML = `<div class="flex justify-center py-32"><div class="flex flex-col items-center gap-3"><div class="w-10 h-10 border-2 border-indigo-500/30 border-t-indigo-400 rounded-full animate-spin"></div><p class="text-sm text-slate-500">Loading...</p></div></div>`
 
     switch (state.activeView) {
       case 'dashboard': renderDashboard(); break
+      case 'review': renderReviewView(); break
       case 'cohorts': renderCohorts(); break
       case 'facility': renderFacilityView(); break
       case 'reports': renderReportsView(); break
@@ -175,34 +203,42 @@
     }
   }
 
-  // ============================================================
-  // DASHBOARD — KRAs & KPIs
-  // ============================================================
+  // ── DASHBOARD — KRAs & KPIs + Submit for Review ──────────
   async function renderDashboard() {
     const content = $('#main-content')
     try {
       const { data: scorecard } = await API.get('/kpis/scorecard')
       const { data: daily } = await API.get('/reports/daily')
       const { data: roadmap } = await API.get('/roadmap')
+      const overallColor = scorecard.overall_pct >= 70 ? 'emerald' : scorecard.overall_pct >= 40 ? 'amber' : 'red'
 
-      const overallColor = scorecard.overall_pct >= 70 ? 'text-emerald-400' : scorecard.overall_pct >= 40 ? 'text-amber-400' : 'text-red-400'
+      const isVenture = state.role === 'venture_owner'
+      // Venture owner sees read-only dashboard with review CTA
+      const reviewBadge = isVenture ? `<a href="#" class="review-link inline-flex items-center gap-2 px-4 py-2 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-400 text-sm hover:bg-amber-500/20 transition"><i class="fas fa-clipboard-check"></i> Review Pending Submissions</a>` : ''
 
       content.innerHTML = `
         <section class="space-y-6">
+          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h2 class="text-xl font-bold">KPI Scorecard</h2>
+              <p class="text-sm text-slate-400">${isVenture ? 'CoE Director KRA Performance Overview' : 'Your KRA Performance Dashboard'}</p>
+            </div>
+            ${reviewBadge}
+          </div>
+
           <!-- OVERALL SCORE -->
-          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+          <div class="glass-card rounded-2xl p-6">
             <div class="flex items-center justify-between">
               <div>
-                <h2 class="text-xl font-bold">KPI Scorecard</h2>
-                <p class="text-slate-400 text-sm">${state.role === 'venture_owner' ? 'CoE Director KRA Performance' : 'Your KRA Performance'}</p>
+                <h3 class="font-semibold">Overall Completion</h3>
+                <p class="text-xs text-slate-500">${scorecard.completed_kpis}/${scorecard.total_kpis} KPIs completed</p>
               </div>
               <div class="text-right">
-                <div class="text-4xl font-bold ${overallColor}">${scorecard.overall_pct}%</div>
-                <div class="text-xs text-slate-500">${scorecard.completed_kpis}/${scorecard.total_kpis} KPIs completed</div>
+                <div class="text-4xl font-extrabold text-${overallColor}-400">${scorecard.overall_pct}%</div>
               </div>
             </div>
-            <div class="mt-4 bg-slate-800 rounded-full h-3 overflow-hidden">
-              <div class="h-full bg-gradient-to-r from-indigo-500 to-cyan-400 rounded-full transition-all duration-1000" style="width:${scorecard.overall_pct}%"></div>
+            <div class="mt-4 bg-slate-800/50 rounded-full h-2.5 overflow-hidden">
+              <div class="h-full bg-gradient-to-r from-indigo-500 to-cyan-400 rounded-full transition-all duration-1000 progress-shimmer" style="width:${scorecard.overall_pct}%"></div>
             </div>
           </div>
 
@@ -211,58 +247,65 @@
 
           <!-- CHARTS ROW -->
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <h3 class="text-lg font-semibold mb-4"><i class="fas fa-chart-bar text-indigo-400 mr-2"></i>KPI Status Distribution</h3>
+            <div class="glass-card rounded-2xl p-6">
+              <h3 class="font-semibold mb-4"><i class="fas fa-chart-bar text-indigo-400 mr-2"></i>KPI Status Distribution</h3>
               <canvas id="kpi-status-chart" height="200"></canvas>
             </div>
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <h3 class="text-lg font-semibold mb-4"><i class="fas fa-chart-line text-cyan-400 mr-2"></i>Roadmap Progress</h3>
+            <div class="glass-card rounded-2xl p-6">
+              <h3 class="font-semibold mb-4"><i class="fas fa-chart-line text-cyan-400 mr-2"></i>Roadmap Progress</h3>
               <canvas id="roadmap-chart" height="200"></canvas>
             </div>
           </div>
 
           <!-- LATEST DAILY UPDATE -->
-          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-            <h3 class="text-lg font-semibold mb-3"><i class="fas fa-clipboard-list text-amber-400 mr-2"></i>Latest Daily Update</h3>
+          <div class="glass-card rounded-2xl p-6">
+            <h3 class="font-semibold mb-3"><i class="fas fa-clipboard-list text-amber-400 mr-2"></i>Latest Daily Update</h3>
             ${daily.length > 0 ? `
-              <div class="space-y-2 text-sm" id="latest-daily">
-                <p><span class="text-slate-500">Date:</span> ${daily[0].report_date}</p>
-                <p><span class="text-slate-500">Attendance:</span> ${daily[0].cohort_attendance || '—'}</p>
-                <p><span class="text-slate-500">Decisions Needed:</span> ${daily[0].decisions_needed || 'None'}</p>
+              <div class="space-y-2 text-sm">
+                <p><span class="text-slate-500">Date:</span> <span class="text-slate-300">${daily[0].report_date}</span></p>
+                <p><span class="text-slate-500">Attendance:</span> <span class="text-slate-300">${daily[0].cohort_attendance || '—'}</span></p>
+                <p><span class="text-slate-500">Decisions Needed:</span> <span class="text-amber-400">${daily[0].decisions_needed || 'None'}</span></p>
               </div>
             ` : '<p class="text-slate-500 text-sm">No daily updates yet.</p>'}
           </div>
         </section>`
 
-      renderKRAGrid(scorecard.kras)
+      renderKRAGrid(scorecard.kras, isVenture)
       renderKPIStatusChart(scorecard.kras)
       renderRoadmapChart(roadmap)
 
-      // Animate
+      // Venture owner "Review" link clicks
+      $$('.review-link').forEach(lnk => {
+        lnk.addEventListener('click', (e) => { e.preventDefault(); state.activeView = 'review'; navigateView() })
+      })
+
       gsap.from('#kra-grid > div', { y: 30, opacity: 0, duration: 0.5, stagger: 0.08 })
     } catch (e) {
       content.innerHTML = errorHtml('dashboard', e)
     }
   }
 
-  function renderKRAGrid(kras) {
+  function renderKRAGrid(kras, isVenture) {
     const grid = $('#kra-grid')
     if (!grid) return
     kras.forEach(kra => {
       const color = kra.completion >= 70 ? 'emerald' : kra.completion >= 40 ? 'amber' : 'red'
       const card = document.createElement('div')
-      card.className = 'bg-slate-900 border border-slate-800 rounded-2xl p-5 hover:border-slate-700 transition cursor-pointer'
+      card.className = 'glass-card rounded-2xl p-5 cursor-pointer transition-all duration-200'
       card.innerHTML = `
         <div class="flex items-center justify-between mb-3">
           <h4 class="font-semibold text-sm">${kra.title}</h4>
-          <span class="text-xs px-2 py-0.5 rounded-full bg-${color}-500/20 text-${color}-400">${kra.completion}%</span>
+          <span class="text-xs px-2 py-1 rounded-full bg-${color}-500/20 text-${color}-400 border border-${color}-500/20">${kra.completion}%</span>
         </div>
         <p class="text-xs text-slate-500 mb-3">${kra.description || ''}</p>
-        <div class="bg-slate-800 rounded-full h-1.5 overflow-hidden mb-3">
+        <div class="bg-slate-800/50 rounded-full h-1.5 overflow-hidden mb-3">
           <div class="h-full bg-${color}-500 rounded-full transition-all duration-700" style="width:${kra.completion}%"></div>
         </div>
         <div class="space-y-1.5" id="kpi-list-${kra.id}"></div>
-        <div class="mt-3 text-xs text-slate-600">${kra.completed}/${kra.total} KPIs &middot; Weight: ${kra.weight}</div>`
+        <div class="mt-3 text-xs text-slate-600 flex items-center justify-between">
+          <span>${kra.completed}/${kra.total} KPIs &middot; Weight: ${kra.weight}</span>
+          <i class="fas fa-chevron-right text-slate-600"></i>
+        </div>`
 
       grid.appendChild(card)
 
@@ -280,46 +323,84 @@
         list.appendChild(row)
       })
 
-      // Click to edit KPI
-      card.addEventListener('click', () => openKPIEditor(kra))
+      // Click opens KPI editor (CoE Leader = submit workflow; Venture Owner = view only)
+      card.addEventListener('click', () => openKPIEditor(kra, isVenture))
     })
   }
 
-  async function openKPIEditor(kra) {
+  async function openKPIEditor(kra, isVenture) {
     const kpiRows = kra.kpis.map(k => `
-      <div class="bg-slate-800 rounded-lg p-3 space-y-2">
+      <div class="bg-slate-800/60 rounded-xl p-4 space-y-2 border border-slate-700/50">
         <div class="flex items-center justify-between">
-          <span class="text-sm font-medium">${k.title}</span>
-          <select onchange="window._updateKPIStatus(${k.id}, this.value)" class="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs">
+          <span class="text-sm font-medium text-slate-200">${k.title}</span>
+          <span class="text-xs text-slate-500">Target: ${k.target_value} ${k.metric_unit || ''}</span>
+        </div>
+        ${!isVenture ? `
+        <div class="flex items-center gap-2">
+          <input id="kpi-val-${k.id}" type="number" value="${k.current_value || 0}" step="any"
+            class="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm w-24 text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition">
+          <span class="text-xs text-slate-500">/ ${k.target_value} ${k.metric_unit || ''}</span>
+          <select id="kpi-status-${k.id}" class="bg-slate-700 border border-slate-600 rounded-lg px-2 py-2 text-xs text-slate-300">
             <option value="pending" ${k.status==='pending'?'selected':''}>Pending</option>
             <option value="in_progress" ${k.status==='in_progress'?'selected':''}>In Progress</option>
             <option value="on_track" ${k.status==='on_track'?'selected':''}>On Track</option>
             <option value="at_risk" ${k.status==='at_risk'?'selected':''}>At Risk</option>
             <option value="completed" ${k.status==='completed'?'selected':''}>Completed</option>
           </select>
+          <input id="kpi-notes-${k.id}" type="text" placeholder="Note (optional)" class="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-xs flex-1 text-slate-300 placeholder-slate-500">
+          <button id="submit-kpi-btn-${k.id}" class="shrink-0 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs px-4 py-2 rounded-lg transition font-medium btn-glow">
+            <i class="fas fa-paper-plane mr-1"></i> Submit
+          </button>
         </div>
-        <div class="flex items-center gap-2">
-          <input id="kpi-val-${k.id}" type="number" value="${k.current_value || 0}" class="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs w-20">
-          <span class="text-xs text-slate-500">/ ${k.target_value} ${k.metric_unit || ''}</span>
-          <button onclick="window._saveKPI(${k.id})" class="ml-auto bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3 py-1 rounded transition">Save</button>
+        <p class="text-xs text-amber-400/70 flex items-center gap-1">
+          <i class="fas fa-info-circle"></i> Submitting sends this KPI update for Venture Owner review
+        </p>
+        ` : `
+        <div class="flex items-center gap-2 text-sm">
+          <span class="text-slate-400">Current: <strong class="text-slate-200">${k.current_value ?? 0}</strong> / ${k.target_value} ${k.metric_unit || ''}</span>
+          <span class="status-badge status-${k.status}">${k.status}</span>
         </div>
+        `}
       </div>`).join('')
 
     showModal(`
       <div class="text-left">
         <h3 class="text-lg font-bold mb-1">${kra.title}</h3>
-        <p class="text-sm text-slate-400 mb-4">${kra.description || ''}</p>
+        <p class="text-sm text-slate-400 mb-4">${kra.description || ''} — ${kra.completion}% complete</p>
         <div class="space-y-2 max-h-96 overflow-y-auto">${kpiRows}</div>
+        ${isVenture ? '<p class="text-xs text-slate-500 mt-4 italic"><i class="fas fa-info-circle mr-1"></i> Use the Review tab to manage KPI submissions from the CoE Director.</p>' : ''}
       </div>`)
 
-    window._updateKPIStatus = async (id, status) => {
-      await API.put(`/kpis/${id}`, { status, current_value: 0 })
-    }
-    window._saveKPI = async (id) => {
-      const val = document.getElementById(`kpi-val-${id}`)?.value
-      await API.put(`/kpis/${id}`, { current_value: parseFloat(val) || 0, status: null })
-      closeModal()
-      state.activeView = 'dashboard'; navigateView()
+    if (!isVenture) {
+      // Wire up submit buttons for each KPI
+      kra.kpis.forEach(kpi => {
+        const btn = document.getElementById(`submit-kpi-btn-${kpi.id}`)
+        if (!btn) return
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation()
+          const val = document.getElementById(`kpi-val-${kpi.id}`)?.value
+          const notes = document.getElementById(`kpi-notes-${kpi.id}`)?.value || ''
+          if (val === undefined || val === '') { toast('Please enter a value.', 'error'); return }
+          btn.disabled = true
+          btn.innerHTML = '<i class="fas fa-spinner animate-spin"></i> Submitting...'
+          try {
+            await API.post('/submissions/kpi', {
+              kpi_id: kpi.id,
+              kra_id: kra.id,
+              current_value: parseFloat(val),
+              previous_value: kpi.current_value || 0,
+              notes: notes
+            })
+            toast('KPI update submitted for review! The Venture Owner will approve it.', 'success')
+            closeModal()
+            state.activeView = 'dashboard'; navigateView()
+          } catch (err) {
+            toast('Submission failed: ' + (err.response?.data?.error || err.message), 'error')
+            btn.disabled = false
+            btn.innerHTML = '<i class="fas fa-paper-plane mr-1"></i> Submit'
+          }
+        })
+      })
     }
   }
 
@@ -365,9 +446,173 @@
     })
   }
 
-  // ============================================================
-  // COHORTS VIEW (CoE Leader)
-  // ============================================================
+  // ── VENTURE OWNER REVIEW TAB ─────────────────────────────
+  async function renderReviewView() {
+    const content = $('#main-content')
+    try {
+      const { data: allSubs } = await API.get('/submissions')
+      const filter = state.reviewFilter || 'pending_review'
+      const subs = filter === 'all' ? allSubs : allSubs.filter(s => s.status === filter)
+
+      content.innerHTML = `
+        <div class="space-y-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 class="text-xl font-bold">KPI Submissions Review</h2>
+              <p class="text-sm text-slate-400">CoE Director submitted KPI updates for your review and approval</p>
+            </div>
+            <div class="flex gap-1 bg-slate-900/60 rounded-xl p-1 border border-slate-800">
+              <button class="review-filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition ${filter==='pending_review'?'bg-indigo-600/20 text-indigo-400':'text-slate-400 hover:text-slate-200'}" data-f="pending_review">Pending</button>
+              <button class="review-filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition ${filter==='approved'?'bg-emerald-600/20 text-emerald-400':'text-slate-400 hover:text-slate-200'}" data-f="approved">Approved</button>
+              <button class="review-filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition ${filter==='rejected'?'bg-red-600/20 text-red-400':'text-slate-400 hover:text-slate-200'}" data-f="rejected">Rejected</button>
+              <button class="review-filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition ${filter==='all'?'bg-slate-600 text-slate-200':'text-slate-400 hover:text-slate-200'}" data-f="all">All</button>
+            </div>
+          </div>
+
+          <div class="space-y-3" id="review-list">
+            ${subs.length === 0 ? `
+              <div class="glass-card rounded-2xl p-12 text-center">
+                <i class="fas fa-check-circle text-4xl text-emerald-400/40 mb-3"></i>
+                <p class="text-slate-400">No ${filter === 'pending_review' ? 'pending' : filter} submissions.</p>
+                <p class="text-xs text-slate-500 mt-1">All caught up!</p>
+              </div>` : ''}
+            ${subs.map(s => `
+              <div class="glass-card rounded-2xl p-5 transition-all duration-200" id="review-card-${s.id}">
+                <div class="flex items-start justify-between gap-4">
+                  <div class="flex-1 space-y-2">
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <span class="font-semibold text-sm">${s.kpi_title}</span>
+                      <span class="text-xs px-2 py-0.5 rounded-full bg-slate-700/50 text-slate-400">${s.kra_title}</span>
+                      <span class="status-badge status-${s.status === 'pending_review' ? 'submitted' : s.status}">${s.status.replace(/_/g, ' ')}</span>
+                    </div>
+                    <div class="grid grid-cols-3 gap-4 text-xs">
+                      <div><span class="text-slate-500">New Value:</span> <span class="text-slate-200 font-medium">${s.current_value}</span> <span class="text-slate-600">${s.metric_unit || ''}</span></div>
+                      <div><span class="text-slate-500">Previous:</span> <span class="text-slate-500">${s.previous_value || '—'}</span></div>
+                      <div><span class="text-slate-500">Target:</span> <span class="text-slate-500">${s.target_value} ${s.metric_unit || ''}</span></div>
+                    </div>
+                    ${s.notes ? `<p class="text-xs text-slate-400 italic"><i class="fas fa-quote-left mr-1 text-slate-600"></i>${s.notes}</p>` : ''}
+                    ${s.reviewer_notes ? `<p class="text-xs ${s.status === 'rejected' ? 'text-red-400' : 'text-emerald-400'}"><i class="fas fa-${s.status === 'rejected' ? 'times-circle' : 'check-circle'} mr-1"></i>Reviewer: ${s.reviewer_notes}</p>` : ''}
+                    <p class="text-xs text-slate-600">Submitted ${s.created_at || ''}</p>
+                  </div>
+                  ${s.status === 'pending_review' ? `
+                  <div class="flex flex-col gap-1.5 shrink-0">
+                    <button class="review-approve-btn bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-400 border border-emerald-600/30 text-xs px-4 py-2 rounded-lg transition font-medium" data-id="${s.id}" data-val="${s.current_value}">
+                      <i class="fas fa-check mr-1"></i> Approve
+                    </button>
+                    <button class="review-edit-btn bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 border border-indigo-600/30 text-xs px-4 py-2 rounded-lg transition font-medium" data-id="${s.id}" data-val="${s.current_value}">
+                      <i class="fas fa-pen mr-1"></i> Edit
+                    </button>
+                    <button class="review-reject-btn bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-600/30 text-xs px-4 py-2 rounded-lg transition font-medium" data-id="${s.id}">
+                      <i class="fas fa-times mr-1"></i> Reject
+                    </button>
+                  </div>` : `
+                  <div class="shrink-0 text-xs text-slate-500">
+                    ${s.reviewed_by ? `<p>by ${s.reviewed_by}</p>` : ''}
+                    ${s.reviewed_at ? `<p>${s.reviewed_at}</p>` : ''}
+                  </div>`}
+                </div>
+              </div>`).join('')}
+          </div>
+        </div>`
+
+      // Filter buttons
+      $$('.review-filter-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          state.reviewFilter = btn.dataset.f
+          state.activeView = 'review'; navigateView()
+        })
+      })
+
+      // Approve
+      $$('.review-approve-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.dataset.id
+          btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner animate-spin"></i>'
+          try {
+            await API.put(`/submissions/${id}`, { action: 'approve', reviewer_notes: 'Approved by Venture Owner.' })
+            toast('KPI submission approved! The KPI has been updated.', 'success')
+            state.activeView = 'review'; navigateView()
+          } catch (e) { toast('Failed: ' + (e.response?.data?.error || e.message), 'error'); btn.disabled = false; btn.innerHTML = '<i class="fas fa-check mr-1"></i> Approve' }
+        })
+      })
+
+      // Edit (Venture Owner changes the value)
+      $$('.review-edit-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.dataset.id
+          const currentVal = btn.dataset.val
+          showModal(`
+            <div class="text-left space-y-4">
+              <h3 class="text-lg font-bold">Edit KPI Submission Value</h3>
+              <p class="text-sm text-slate-400">Modify the submitted value before approving.</p>
+              <div>
+                <label class="text-xs text-slate-400">Adjusted Value</label>
+                <input id="edit-val-${id}" type="number" step="any" value="${currentVal}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2.5 text-sm mt-1 text-slate-100">
+              </div>
+              <div>
+                <label class="text-xs text-slate-400">Review Note</label>
+                <input id="edit-note-${id}" type="text" placeholder="Rationale for adjustment..." class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2.5 text-sm mt-1 text-slate-100 placeholder-slate-500">
+              </div>
+              <button id="edit-confirm-${id}" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow">
+                <i class="fas fa-save mr-1"></i> Save & Submit for Re-Review
+              </button>
+            </div>`)
+          const confirmBtn = document.getElementById(`edit-confirm-${id}`)
+          confirmBtn.addEventListener('click', async () => {
+            const newVal = parseFloat(document.getElementById(`edit-val-${id}`).value)
+            const note = document.getElementById(`edit-note-${id}`).value
+            confirmBtn.disabled = true; confirmBtn.innerHTML = '<i class="fas fa-spinner animate-spin"></i> Saving...'
+            try {
+              await API.put(`/submissions/${id}`, { action: 'edit', current_value: newVal, reviewer_notes: note || 'Value adjusted by Venture Owner.' })
+              toast('Submission edited. It is back in pending review.', 'info')
+              closeModal()
+              state.activeView = 'review'; navigateView()
+            } catch (e) { toast('Failed: ' + (e.response?.data?.error || e.message), 'error'); confirmBtn.disabled = false; confirmBtn.innerHTML = '<i class="fas fa-save mr-1"></i> Save & Submit' }
+          })
+        })
+      })
+
+      // Reject
+      $$('.review-reject-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.dataset.id
+          showModal(`
+            <div class="text-left space-y-4">
+              <h3 class="text-lg font-bold">Reject KPI Submission</h3>
+              <p class="text-sm text-slate-400">Provide a reason so the CoE Director knows what to revise.</p>
+              <div>
+                <label class="text-xs text-slate-400">Rejection Reason</label>
+                <textarea id="reject-note-${id}" rows="3" placeholder="Why is this being rejected? What needs to change?" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2.5 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea>
+              </div>
+              <div class="flex gap-2">
+                <button id="reject-cancel-${id}" class="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-300 py-2.5 rounded-lg text-sm transition">Cancel</button>
+                <button id="reject-confirm-${id}" class="flex-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-600/30 py-2.5 rounded-lg text-sm font-medium transition">
+                  <i class="fas fa-times mr-1"></i> Reject
+                </button>
+              </div>
+            </div>`)
+          document.getElementById(`reject-cancel-${id}`).addEventListener('click', closeModal)
+          document.getElementById(`reject-confirm-${id}`).addEventListener('click', async () => {
+            const note = document.getElementById(`reject-note-${id}`).value
+            const btn = document.getElementById(`reject-confirm-${id}`)
+            btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner animate-spin"></i>'
+            try {
+              await API.put(`/submissions/${id}`, { action: 'reject', reviewer_notes: note || 'Needs revision.' })
+              toast('KPI submission rejected. The CoE Director will be notified.', 'info')
+              closeModal()
+              state.activeView = 'review'; navigateView()
+            } catch (e) { toast('Failed: ' + (e.response?.data?.error || e.message), 'error'); btn.disabled = false; btn.innerHTML = '<i class="fas fa-times mr-1"></i> Reject' }
+          })
+        })
+      })
+
+      gsap.from('#review-list > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.06 })
+    } catch (e) {
+      content.innerHTML = errorHtml('review', e)
+    }
+  }
+
+  // ── COHORTS VIEW ─────────────────────────────────────────
   async function renderCohorts() {
     const content = $('#main-content')
     try {
@@ -378,20 +623,20 @@
         <div class="space-y-6">
           <div class="flex items-center justify-between">
             <div><h2 class="text-xl font-bold">Cohort Pipeline</h2><p class="text-sm text-slate-400">Student progression through Stages A→E</p></div>
-            <button id="add-cohort-btn" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition"><i class="fas fa-plus mr-1"></i> New Cohort</button>
+            <button id="add-cohort-btn" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition btn-glow"><i class="fas fa-plus mr-1"></i> New Cohort</button>
           </div>
           <div class="grid grid-cols-1 md:grid-cols-5 gap-3" id="stage-columns">
             ${['A','B','C','D','E'].map(stage => {
               const stageLabels = { A: 'Foundation', B: 'Build', C: 'Field/Immersion', D: 'R&D/Projects', E: 'Service/Placement' }
               const stageColors = { A: 'border-indigo-500', B: 'border-blue-500', C: 'border-cyan-500', D: 'border-amber-500', E: 'border-emerald-500' }
               const stageStudents = students.filter(s => s.current_stage === stage)
-              return `<div class="bg-slate-900 border-t-2 ${stageColors[stage]} rounded-xl p-4" id="stage-${stage}">
+              return `<div class="glass-card border-t-2 ${stageColors[stage]} rounded-xl p-4" id="stage-${stage}">
                 <h3 class="font-bold text-sm mb-1">Stage ${stage}</h3>
-                <p class="text-xs text-slate-500 mb-3">${stageLabels[stage]}</p>
+                <p class="text-xs text-slate-500 mb-3">${stageLabels[stage]} (${stageStudents.length})</p>
                 <div class="space-y-1.5" id="stage-list-${stage}">${stageStudents.map(s => `
-                  <div class="bg-slate-800 rounded-lg px-3 py-2 text-xs flex items-center justify-between" data-student-id="${s.id}">
-                    <span>${s.name}</span>
-                    <div class="w-12 bg-slate-700 rounded-full h-1.5 overflow-hidden">
+                  <div class="bg-slate-800/60 rounded-lg px-3 py-2 text-xs flex items-center justify-between" data-student-id="${s.id}">
+                    <span class="truncate mr-2">${s.name}</span>
+                    <div class="w-12 bg-slate-700 rounded-full h-1.5 overflow-hidden shrink-0">
                       <div class="h-full bg-indigo-500 rounded-full" style="width:${s.progress_pct}%"></div>
                     </div>
                   </div>`).join('')}
@@ -400,25 +645,22 @@
               </div>`
             }).join('')}
           </div>
-          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6" id="cohorts-table-section"></div>
+          <div class="glass-card rounded-2xl p-6" id="cohorts-table-section"></div>
         </div>`
 
-      // Cohort list table
       let cohortHTML = `<h3 class="font-semibold mb-3">All Cohorts</h3>
         <div class="overflow-x-auto"><table class="w-full text-sm">
-          <thead><tr class="text-slate-500 text-left"><th class="p-2">Name</th><th class="p-2">Stage</th><th class="p-2">Campus</th><th class="p-2">Students</th><th class="p-2">Dates</th><th class="p-2">Status</th></tr></thead>
-          <tbody>${cohorts.map(c => `<tr class="border-t border-slate-800 hover:bg-slate-800/50 transition">
-            <td class="p-2 font-medium">${c.name}</td><td class="p-2"><span class="px-2 py-0.5 rounded text-xs bg-indigo-500/20 text-indigo-400">Stage ${c.stage}</span></td>
-            <td class="p-2 text-slate-400">${c.campus}</td><td class="p-2">${c.student_count}</td>
-            <td class="p-2 text-xs text-slate-500">${c.start_date || '—'} → ${c.end_date || '—'}</td>
-            <td class="p-2"><span class="status-badge status-${c.status}">${c.status}</span></td>
+          <thead><tr class="text-slate-500 text-left"><th class="p-3">Name</th><th class="p-3">Stage</th><th class="p-3">Campus</th><th class="p-3">Students</th><th class="p-3">Dates</th><th class="p-3">Status</th></tr></thead>
+          <tbody>${cohorts.map(c => `<tr class="border-t border-slate-800/50 hover:bg-slate-800/30 transition">
+            <td class="p-3 font-medium">${c.name}</td><td class="p-3"><span class="px-2 py-1 rounded-lg text-xs bg-indigo-500/20 text-indigo-400 border border-indigo-500/20">Stage ${c.stage}</span></td>
+            <td class="p-3 text-slate-400">${c.campus}</td><td class="p-3">${c.student_count}</td>
+            <td class="p-3 text-xs text-slate-500">${c.start_date || '—'} → ${c.end_date || '—'}</td>
+            <td class="p-3"><span class="status-badge status-${c.status}">${c.status}</span></td>
           </tr>`).join('')}</tbody></table></div>`
       $('#cohorts-table-section').innerHTML = cohortHTML
 
-      // Add cohort button
       $('#add-cohort-btn').addEventListener('click', () => openCohortForm())
 
-      // Stage pipeline animation
       gsap.from('#stage-columns > div', { y: 40, opacity: 0, duration: 0.6, stagger: 0.1 })
     } catch (e) {
       content.innerHTML = errorHtml('cohorts', e)
@@ -431,15 +673,15 @@
       <form id="cohort-form" class="space-y-4 text-left">
         <h3 class="text-lg font-bold">${editData ? 'Edit' : 'New'} Cohort</h3>
         <div class="grid grid-cols-2 gap-3">
-          <div><label class="text-xs text-slate-400">Name</label><input name="name" value="${d.name || ''}" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1"></div>
-          <div><label class="text-xs text-slate-400">Stage</label><select name="stage" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1">${['A','B','C','D','E'].map(s => `<option value="${s}" ${d.stage===s?'selected':''}>Stage ${s}</option>`).join('')}</select></div>
-          <div><label class="text-xs text-slate-400">Campus</label><select name="campus" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1">${['ramapuram','trichy','both'].map(c => `<option value="${c}" ${d.campus===c?'selected':''}>${c}</option>`).join('')}</select></div>
-          <div><label class="text-xs text-slate-400">Students</label><input name="student_count" type="number" value="${d.student_count || 20}" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1"></div>
-          <div><label class="text-xs text-slate-400">Start</label><input name="start_date" type="date" value="${d.start_date || ''}" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1"></div>
-          <div><label class="text-xs text-slate-400">End</label><input name="end_date" type="date" value="${d.end_date || ''}" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1"></div>
-          <div><label class="text-xs text-slate-400">Status</label><select name="status" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1">${['planned','active','completed','paused'].map(s => `<option value="${s}" ${d.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
+          <div><label class="text-xs text-slate-400">Name</label><input name="name" value="${d.name || ''}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+          <div><label class="text-xs text-slate-400">Stage</label><select name="stage" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">${['A','B','C','D','E'].map(s => `<option value="${s}" ${d.stage===s?'selected':''}>Stage ${s}</option>`).join('')}</select></div>
+          <div><label class="text-xs text-slate-400">Campus</label><select name="campus" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">${['ramapuram','trichy','both'].map(c => `<option value="${c}" ${d.campus===c?'selected':''}>${c}</option>`).join('')}</select></div>
+          <div><label class="text-xs text-slate-400">Students</label><input name="student_count" type="number" value="${d.student_count || 20}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+          <div><label class="text-xs text-slate-400">Start</label><input name="start_date" type="date" value="${d.start_date || ''}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+          <div><label class="text-xs text-slate-400">End</label><input name="end_date" type="date" value="${d.end_date || ''}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+          <div><label class="text-xs text-slate-400">Status</label><select name="status" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">${['planned','active','completed','paused'].map(s => `<option value="${s}" ${d.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
         </div>
-        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-lg font-medium transition">Save Cohort</button>
+        <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow">Save Cohort</button>
       </form>`)
 
     $('#cohort-form').addEventListener('submit', async (e) => {
@@ -447,42 +689,39 @@
       const fd = new FormData(e.target)
       const payload = Object.fromEntries(fd.entries())
       payload.student_count = parseInt(payload.student_count)
-      if (editData.id) await API.put(`/cohorts/${editData.id}`, payload)
+      if (editData && editData.id) await API.put(`/cohorts/${editData.id}`, payload)
       else await API.post('/cohorts', payload)
       closeModal()
       state.activeView = 'cohorts'; navigateView()
     })
   }
 
-  // ============================================================
-  // FACILITY 3D VIEW (CoE Leader)
-  // ============================================================
+  // ── FACILITY 3D VIEW ─────────────────────────────────────
   async function renderFacilityView() {
     const content = $('#main-content')
     content.innerHTML = `
       <div class="space-y-4">
         <div class="flex items-center justify-between">
-          <div><h2 class="text-xl font-bold">Facility Layout</h2><p class="text-sm text-slate-400">3D Warehouse & Lab Layout</p></div>
-          <div class="flex gap-2">
-            <button id="fac-ramapuram" class="campus-toggle px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white">Ramapuram</button>
-            <button id="fac-trichy" class="campus-toggle px-4 py-2 rounded-lg text-sm font-medium bg-slate-800 text-slate-400 hover:bg-slate-700">Trichy</button>
+          <div><h2 class="text-xl font-bold">Facility Layout</h2><p class="text-sm text-slate-400">3D Warehouse &amp; Lab Layout</p></div>
+          <div class="flex gap-1 bg-slate-900/60 rounded-xl p-1 border border-slate-800">
+            <button id="fac-ramapuram" class="campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-600 text-white">Ramapuram</button>
+            <button id="fac-trichy" class="campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200">Trichy</button>
           </div>
         </div>
-        <div id="three-container" class="bg-slate-900 border border-slate-800 rounded-2xl" style="height:500px;"></div>
+        <div id="three-container" class="glass-card rounded-2xl" style="height:500px;"></div>
         <div id="facility-legend" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
       </div>`
 
-    document.getElementById('fac-ramapuram').addEventListener('click', () => { state.facilityCampus = 'ramapuram'; initThreeJS() })
-    document.getElementById('fac-trichy').addEventListener('click', () => { state.facilityCampus = 'trichy'; initThreeJS() })
-    updateCampusToggles()
+    document.getElementById('fac-ramapuram').addEventListener('click', () => { state.facilityCampus = 'ramapuram'; updateCampusToggles(); initThreeJS() })
+    document.getElementById('fac-trichy').addEventListener('click', () => { state.facilityCampus = 'trichy'; updateCampusToggles(); initThreeJS() })
     initThreeJS()
   }
 
   function updateCampusToggles() {
     const r = $('#fac-ramapuram'), t = $('#fac-trichy')
     if (!r || !t) return
-    if (state.facilityCampus === 'ramapuram') { r.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white'; t.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium bg-slate-800 text-slate-400 hover:bg-slate-700' }
-    else { t.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white'; r.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium bg-slate-800 text-slate-400 hover:bg-slate-700' }
+    if (state.facilityCampus === 'ramapuram') { r.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-600 text-white'; t.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200' }
+    else { t.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-600 text-white'; r.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200' }
   }
 
   async function initThreeJS() {
@@ -505,7 +744,6 @@
     renderer.shadowMap.type = THREE.PCFSoftShadowMap
     container.appendChild(renderer.domElement)
 
-    // Lights
     const ambient = new THREE.AmbientLight(0x404060, 1.5)
     scene.add(ambient)
     const dir = new THREE.DirectionalLight(0xffffff, 2)
@@ -516,7 +754,6 @@
     dir.shadow.camera.top = 300; dir.shadow.camera.bottom = -300
     scene.add(dir)
 
-    // Grid floor
     const grid = new THREE.GridHelper(400, 40, 0x1e293b, 0x0f172a)
     scene.add(grid)
 
@@ -540,7 +777,6 @@
       mesh.userData = { facility: f }
       scene.add(mesh)
 
-      // Edge highlight
       const edgeGeo = new THREE.EdgesGeometry(geo)
       const edgeMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.2 })
       const edgeLine = new THREE.LineSegments(edgeGeo, edgeMat)
@@ -550,18 +786,16 @@
       labelCache.push({ x: mesh.position.x, z: mesh.position.z, name: f.name, status: f.status, zoneType: f.zone_type })
     })
 
-    // Legend
     const legend = $('#facility-legend')
     if (legend) {
       legend.innerHTML = labelCache.map(l => `
-        <div class="bg-slate-800 rounded-lg px-3 py-2 text-xs flex items-center gap-2">
+        <div class="bg-slate-800/60 rounded-xl px-3 py-2 text-xs flex items-center gap-2 border border-slate-700/30">
           <span class="w-3 h-3 rounded-sm" style="background:#${zoneColors[l.zoneType]?.toString(16).padStart(6,'0') || '6366f1'}"></span>
           <span class="truncate">${l.name}</span>
           <span class="ml-auto status-badge status-${l.status}">${l.status}</span>
         </div>`).join('')
     }
 
-    // Raycaster for hover
     const raycaster = new THREE.Raycaster()
     const mouse = new THREE.Vector2()
     container.addEventListener('mousemove', (e) => {
@@ -575,12 +809,9 @@
         const obj = intersects[0].object
         if (obj.material.emissive) obj.material.emissive.set(0x333333)
         container.style.cursor = 'pointer'
-      } else {
-        container.style.cursor = 'grab'
-      }
+      } else { container.style.cursor = 'grab' }
     })
 
-    // Orbit controls (simple)
     let isDragging = false, prevX = 0, prevY = 0
     container.addEventListener('mousedown', (e) => { isDragging = true; prevX = e.clientX; prevY = e.clientY })
     window.addEventListener('mouseup', () => { isDragging = false })
@@ -607,13 +838,10 @@
     }
     animate()
 
-    // GSAP entrance
     gsap.from(camera.position, { y: 50, duration: 1.5, ease: 'power2.out' })
   }
 
-  // ============================================================
-  // REPORTS VIEW
-  // ============================================================
+  // ── REPORTS VIEW ─────────────────────────────────────────
   async function renderReportsView() {
     const content = $('#main-content')
     try {
@@ -628,13 +856,11 @@
           <div class="flex items-center justify-between">
             <div><h2 class="text-xl font-bold">Reports</h2><p class="text-sm text-slate-400">Daily / Weekly / Monthly Reporting</p></div>
             <div class="flex gap-2">
-              ${!isVenture ? '<button id="new-daily-btn" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition"><i class="fas fa-plus mr-1"></i> Daily Update</button>' : ''}
-              <button id="export-csv-btn" class="bg-slate-700 hover:bg-slate-600 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition"><i class="fas fa-download mr-1"></i> Export KPI CSV</button>
+              ${!isVenture ? '<button id="new-daily-btn" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition btn-glow"><i class="fas fa-plus mr-1"></i> Daily Update</button>' : ''}
+              <button id="export-csv-btn" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-4 py-2 rounded-xl text-sm font-medium transition"><i class="fas fa-download mr-1"></i> Export KPI CSV</button>
             </div>
           </div>
-
-          <!-- Tab bar for report types -->
-          <div class="flex gap-1 bg-slate-900 rounded-xl p-1 w-fit" id="report-tabs">
+          <div class="flex gap-1 bg-slate-900/60 rounded-xl p-1 w-fit border border-slate-800">
             <button class="report-tab px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600/20 text-indigo-400" data-rt="daily">Daily</button>
             <button class="report-tab px-4 py-2 rounded-lg text-sm font-medium text-slate-400 hover:text-slate-200" data-rt="weekly">Weekly</button>
             <button class="report-tab px-4 py-2 rounded-lg text-sm font-medium text-slate-400 hover:text-slate-200" data-rt="monthly">Monthly</button>
@@ -643,10 +869,8 @@
           <div id="report-content-area" class="space-y-4"></div>
         </div>`
 
-      // Initial display
       renderReportContent('daily', daily, weekly, monthly, saved, isVenture)
 
-      // Tab switchers
       $$('.report-tab').forEach(btn => {
         btn.addEventListener('click', () => {
           $$('.report-tab').forEach(b => { b.className = 'report-tab px-4 py-2 rounded-lg text-sm font-medium text-slate-400 hover:text-slate-200' })
@@ -655,9 +879,7 @@
         })
       })
 
-      if (!isVenture) {
-        $('#new-daily-btn').addEventListener('click', () => openDailyReportForm())
-      }
+      if (!isVenture) $('#new-daily-btn').addEventListener('click', () => openDailyReportForm())
       $('#export-csv-btn').addEventListener('click', () => downloadCSV('kpis'))
 
       gsap.from('#report-content-area > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.08 })
@@ -669,55 +891,54 @@
   function renderReportContent(type, daily, weekly, monthly, saved, isVenture) {
     const area = $('#report-content-area')
     if (!area) return
-
     switch (type) {
       case 'daily':
-        area.innerHTML = daily.length === 0 ? '<p class="text-slate-500 text-sm p-4">No daily updates yet.</p>' : daily.map(d => `
-          <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-2">
-            <div class="flex items-center justify-between"><span class="font-semibold">📅 ${d.report_date}</span><span class="text-xs text-slate-500">${d.created_at || ''}</span></div>
+        area.innerHTML = daily.length === 0 ? '<div class="glass-card rounded-xl p-8 text-center"><p class="text-slate-500">No daily updates yet.</p></div>' : daily.map(d => `
+          <div class="glass-card rounded-xl p-5 space-y-2">
+            <div class="flex items-center justify-between"><span class="font-semibold">${d.report_date}</span><span class="text-xs text-slate-500">${d.created_at || ''}</span></div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-              <div><span class="text-slate-500">Cohort Attendance:</span> <span class="text-slate-300">${d.cohort_attendance || '—'}</span></div>
-              <div><span class="text-slate-500">Facility/Safety Issues:</span> <span class="text-slate-300">${d.facility_safety_issues || 'None'}</span></div>
-              <div><span class="text-slate-500">Vendor/Asset Blockers:</span> <span class="text-slate-300">${d.vendor_asset_blockers || 'None'}</span></div>
-              <div><span class="text-slate-500">Prototype/Test Status:</span> <span class="text-slate-300">${d.prototype_test_status || '—'}</span></div>
+              <div><span class="text-slate-500">Attendance:</span> <span class="text-slate-300">${d.cohort_attendance || '—'}</span></div>
+              <div><span class="text-slate-500">Safety Issues:</span> <span class="text-slate-300">${d.facility_safety_issues || 'None'}</span></div>
+              <div><span class="text-slate-500">Vendor Blockers:</span> <span class="text-slate-300">${d.vendor_asset_blockers || 'None'}</span></div>
+              <div><span class="text-slate-500">Prototype Status:</span> <span class="text-slate-300">${d.prototype_test_status || '—'}</span></div>
             </div>
-            <p><span class="text-slate-500">Decisions Needed (24h):</span> <span class="text-amber-400">${d.decisions_needed || 'None'}</span></p>
+            <p><span class="text-slate-500">Decisions Needed:</span> <span class="text-amber-400">${d.decisions_needed || 'None'}</span></p>
           </div>`).join('')
         break
       case 'weekly':
-        area.innerHTML = weekly.length === 0 ? '<p class="text-slate-500 text-sm p-4">No weekly reports yet.</p>' : weekly.map(w => `
-          <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-2">
-            <div class="flex items-center justify-between"><span class="font-semibold">📊 ${w.week_start} → ${w.week_end}</span><span class="status-badge status-${w.status}">${w.status}</span></div>
+        area.innerHTML = weekly.length === 0 ? '<div class="glass-card rounded-xl p-8 text-center"><p class="text-slate-500">No weekly reports yet.</p></div>' : weekly.map(w => `
+          <div class="glass-card rounded-xl p-5 space-y-2">
+            <div class="flex items-center justify-between"><span class="font-semibold">${w.week_start} → ${w.week_end}</span><span class="status-badge status-${w.status}">${w.status}</span></div>
             <div class="text-sm space-y-1">
               <p><span class="text-slate-500">Progress vs Plan:</span> ${w.progress_vs_plan || '—'}</p>
-              <p><span class="text-slate-500">Risks & Mitigations:</span> ${w.risks_mitigations || '—'}</p>
+              <p><span class="text-slate-500">Risks:</span> ${w.risks_mitigations || '—'}</p>
               <p><span class="text-slate-500">Asks:</span> ${w.asks || '—'}</p>
             </div>
           </div>`).join('')
         break
       case 'monthly':
-        area.innerHTML = monthly.length === 0 ? '<p class="text-slate-500 text-sm p-4">No monthly reports yet.</p>' : monthly.map(m => `
-          <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-2">
-            <div class="flex items-center justify-between"><span class="font-semibold">📈 ${m.report_month}</span><span class="status-badge status-${m.status}">${m.status}</span></div>
+        area.innerHTML = monthly.length === 0 ? '<div class="glass-card rounded-xl p-8 text-center"><p class="text-slate-500">No monthly reports yet.</p></div>' : monthly.map(m => `
+          <div class="glass-card rounded-xl p-5 space-y-2">
+            <div class="flex items-center justify-between"><span class="font-semibold">${m.report_month}</span><span class="status-badge status-${m.status}">${m.status}</span></div>
             <div class="text-sm space-y-1">
               <p><span class="text-slate-500">Strategic Decisions:</span> ${m.strategic_decisions || '—'}</p>
-              <p><span class="text-slate-500">Budget Approvals Required:</span> ${m.budget_approvals || '—'}</p>
-              <p><span class="text-slate-500">Next Month Plan:</span> ${m.next_month_plan || '—'}</p>
+              <p><span class="text-slate-500">Budget Approvals:</span> ${m.budget_approvals || '—'}</p>
+              <p><span class="text-slate-500">Next Month:</span> ${m.next_month_plan || '—'}</p>
             </div>
           </div>`).join('')
         break
       case 'saved':
-        area.innerHTML = saved.length === 0 ? '<p class="text-slate-500 text-sm p-4">No saved/generated reports yet.</p>' : saved.map(r => `
-          <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
+        area.innerHTML = saved.length === 0 ? '<div class="glass-card rounded-xl p-8 text-center"><p class="text-slate-500">No saved reports yet.</p></div>' : saved.map(r => `
+          <div class="glass-card rounded-xl p-5 space-y-3">
             <div class="flex items-center justify-between">
-              <span class="font-semibold">📄 ${r.title}</span>
+              <span class="font-semibold">${r.title}</span>
               <div class="flex gap-2">
-                ${r.share_token ? `<button onclick="window._copyShareLink('${r.share_token}')" class="text-xs bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded transition"><i class="fas fa-share-alt mr-1"></i>Copy Share Link</button>` : ''}
-                <button onclick="window._shareReport('${r.title}','${r.content || ''}')" class="text-xs bg-indigo-600 hover:bg-indigo-500 px-2 py-1 rounded transition"><i class="fas fa-paper-plane mr-1"></i>Share</button>
+                ${r.share_token ? `<button onclick="window._copyShareLink('${r.share_token}')" class="text-xs bg-slate-700/50 hover:bg-slate-600 px-3 py-1.5 rounded-lg transition border border-slate-700"><i class="fas fa-share-alt mr-1"></i>Copy Link</button>` : ''}
+                <button onclick="window._shareReport('${r.title}','${(r.content || '').replace(/'/g, "\\'").replace(/\n/g, '\\n')}')" class="text-xs bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded-lg transition"><i class="fas fa-paper-plane mr-1"></i>Share</button>
               </div>
             </div>
             <p class="text-xs text-slate-500">${r.report_type} &middot; ${r.created_at || ''}</p>
-            ${r.content ? `<div class="text-sm text-slate-300 bg-slate-800 rounded-lg p-3 max-h-48 overflow-y-auto whitespace-pre-wrap">${r.content.substring(0, 800)}${r.content.length > 800 ? '...' : ''}</div>` : ''}
+            ${r.content ? `<div class="text-sm text-slate-300 bg-slate-800/60 rounded-xl p-4 max-h-48 overflow-y-auto whitespace-pre-wrap border border-slate-700/30">${r.content.substring(0, 800)}${r.content.length > 800 ? '...' : ''}</div>` : ''}
           </div>`).join('')
         break
     }
@@ -728,28 +949,26 @@
     showModal(`
       <form id="daily-form" class="space-y-4 text-left">
         <h3 class="text-lg font-bold">Daily Update — ${today}</h3>
-        <div><label class="text-xs text-slate-400">Cohort Attendance & Activities</label><textarea name="cohort_attendance" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1" placeholder="e.g., 18/20 present, Stage B assembly workshop"></textarea></div>
-        <div><label class="text-xs text-slate-400">Facility / Safety Issues</label><textarea name="facility_safety_issues" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1" placeholder="Any issues today?"></textarea></div>
-        <div><label class="text-xs text-slate-400">Critical Vendor / Asset Blockers</label><textarea name="vendor_asset_blockers" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1"></textarea></div>
-        <div><label class="text-xs text-slate-400">Prototype / Test Status Summary</label><textarea name="prototype_test_status" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1"></textarea></div>
-        <div><label class="text-xs text-slate-400">Decisions Needed in 24 Hours <span class="text-amber-400">*</span></label><textarea name="decisions_needed" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1"></textarea></div>
+        <div><label class="text-xs text-slate-400">Cohort Attendance</label><textarea name="cohort_attendance" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500" placeholder="e.g., 18/20 present"></textarea></div>
+        <div><label class="text-xs text-slate-400">Facility/Safety Issues</label><textarea name="facility_safety_issues" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
+        <div><label class="text-xs text-slate-400">Vendor/Asset Blockers</label><textarea name="vendor_asset_blockers" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
+        <div><label class="text-xs text-slate-400">Prototype/Test Status</label><textarea name="prototype_test_status" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
+        <div><label class="text-xs text-slate-400">Decisions Needed <span class="text-amber-400">*</span></label><textarea name="decisions_needed" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
         <input type="hidden" name="report_date" value="${today}">
-        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-lg font-medium transition">Submit Daily Update</button>
+        <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow">Submit Daily Update</button>
       </form>`)
 
     $('#daily-form').addEventListener('submit', async (e) => {
       e.preventDefault()
       const fd = new FormData(e.target)
-      const payload = Object.fromEntries(fd.entries())
-      await API.post('/reports/daily', payload)
+      await API.post('/reports/daily', Object.fromEntries(fd.entries()))
+      toast('Daily update submitted!', 'success')
       closeModal()
       state.activeView = 'reports'; navigateView()
     })
   }
 
-  // ============================================================
-  // ROADMAP VIEW (CoE Leader)
-  // ============================================================
+  // ── ROADMAP VIEW ─────────────────────────────────────────
   async function renderRoadmap() {
     const content = $('#main-content')
     try {
@@ -760,25 +979,25 @@
           <div class="relative" id="roadmap-timeline">
             <div class="absolute left-6 top-0 bottom-0 w-0.5 bg-gradient-to-b from-indigo-500 to-cyan-400 hidden sm:block"></div>
             <div class="space-y-6">${roadmap.map((m, i) => {
-              const statusColors = { completed: 'border-emerald-500 bg-emerald-500/5', in_progress: 'border-indigo-500 bg-indigo-500/5', pending: 'border-slate-700 bg-slate-900', blocked: 'border-red-500 bg-red-500/5' }
-              const statusBadge = { completed: 'bg-emerald-500/20 text-emerald-400', in_progress: 'bg-indigo-500/20 text-indigo-400', pending: 'bg-slate-700 text-slate-400', blocked: 'bg-red-500/20 text-red-400' }
+              const statusColors = { completed: 'border-emerald-500/40', in_progress: 'border-indigo-500/40', pending: 'border-slate-700/40', blocked: 'border-red-500/40' }
+              const statusBadge = { completed: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/20', in_progress: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/20', pending: 'bg-slate-700/50 text-slate-400 border-slate-700/30', blocked: 'bg-red-500/20 text-red-400 border-red-500/20' }
               let tasks = []
               try { tasks = JSON.parse(m.tasks) } catch {}
-              return `<div class="flex gap-4 sm:gap-6 ${statusColors[m.status]} border rounded-2xl p-5 sm:ml-0 ml-6 relative">
-                <div class="hidden sm:flex shrink-0 w-12 h-12 rounded-full items-center justify-center ${m.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' : m.status === 'in_progress' ? 'bg-indigo-500/20 text-indigo-400' : 'bg-slate-800 text-slate-500'}">
+              return `<div class="glass-card flex gap-4 sm:gap-6 border-l-2 ${statusColors[m.status]} rounded-2xl p-5 sm:ml-0 ml-6 relative">
+                <div class="hidden sm:flex shrink-0 w-12 h-12 rounded-xl items-center justify-center ${m.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : m.status === 'in_progress' ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30' : 'bg-slate-800/50 text-slate-500 border border-slate-700/30'}">
                   <i class="fas ${m.status === 'completed' ? 'fa-check' : m.status === 'in_progress' ? 'fa-spinner' : 'fa-circle'}"></i>
                 </div>
                 <div class="flex-1">
                   <div class="flex items-center gap-3 mb-2">
                     <span class="font-bold">${m.month_range}</span>
-                    <span class="text-xs px-2 py-0.5 rounded-full ${statusBadge[m.status]}">${m.status}</span>
+                    <span class="text-xs px-2 py-0.5 rounded-full border ${statusBadge[m.status]}">${m.status}</span>
                   </div>
                   <h3 class="font-semibold mb-1">${m.phase_title}</h3>
                   <p class="text-sm text-slate-400 mb-3">${m.description}</p>
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                     ${tasks.map(t => `<div class="text-xs text-slate-300 flex items-center gap-1.5"><i class="fas fa-circle text-[4px] text-indigo-400"></i> ${t}</div>`).join('')}
                   </div>
-                  <select onchange="window._updateRoadmap(${m.id}, this.value)" class="mt-3 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs">
+                  <select onchange="window._updateRoadmap(${m.id}, this.value)" class="mt-3 bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-300">
                     <option value="pending" ${m.status==='pending'?'selected':''}>Pending</option>
                     <option value="in_progress" ${m.status==='in_progress'?'selected':''}>In Progress</option>
                     <option value="completed" ${m.status==='completed'?'selected':''}>Completed</option>
@@ -792,6 +1011,7 @@
 
       window._updateRoadmap = async (id, status) => {
         await API.put(`/roadmap/${id}`, { status, tasks: null })
+        toast('Roadmap milestone updated!', 'success')
         state.activeView = 'roadmap'; navigateView()
       }
 
@@ -801,62 +1021,51 @@
     }
   }
 
-  // ============================================================
-  // PROCUREMENT (Venture Owner)
-  // ============================================================
+  // ── PROCUREMENT ──────────────────────────────────────────
   async function renderProcurement() {
     const content = $('#main-content')
     try {
       const { data: items } = await API.get('/procurement')
       const { data: summary } = await API.get('/procurement/summary')
       const totalEst = summary.total_estimated.toLocaleString('en-IN')
-
       const bucketLabels = { 1: 'Must-Have Now', 2: 'Buy Once Growth Proven', 3: 'Rent/Partner First' }
 
       content.innerHTML = `
         <div class="space-y-6">
           <div class="flex items-center justify-between">
-            <div><h2 class="text-xl font-bold">Procurement Strategy</h2><p class="text-sm text-slate-400">Three-bucket spend logic — Total Est: ₹${totalEst}</p></div>
+            <div><h2 class="text-xl font-bold">Procurement Strategy</h2><p class="text-sm text-slate-400">Three-bucket spend — Total Est: ₹${totalEst}</p></div>
           </div>
-
-          <!-- Summary cards -->
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-4" id="bucket-summary"></div>
-
-          <div class="overflow-x-auto bg-slate-900 border border-slate-800 rounded-2xl">
+          <div class="overflow-x-auto glass-card rounded-2xl">
             <table class="w-full text-sm">
-              <thead><tr class="text-slate-500 text-left border-b border-slate-800"><th class="p-3">Item</th><th class="p-3">Category</th><th class="p-3">Campus</th><th class="p-3">Bucket</th><th class="p-3">Est. Cost (₹)</th><th class="p-3">Status</th><th class="p-3">Action</th></tr></thead>
+              <thead><tr class="text-slate-500 text-left border-b border-slate-800/50"><th class="p-3">Item</th><th class="p-3">Category</th><th class="p-3">Campus</th><th class="p-3">Bucket</th><th class="p-3">Est. Cost (₹)</th><th class="p-3">Status</th></tr></thead>
               <tbody>${items.map(i => `
-                <tr class="border-t border-slate-800 hover:bg-slate-800/50 transition">
+                <tr class="border-t border-slate-800/30 hover:bg-slate-800/20 transition">
                   <td class="p-3 font-medium">${i.item_name}</td>
                   <td class="p-3 text-slate-400">${i.category}</td>
                   <td class="p-3 text-slate-400">${i.campus_priority}</td>
-                  <td class="p-3"><span class="px-2 py-0.5 rounded text-xs ${i.spend_bucket === 1 ? 'bg-red-500/20 text-red-400' : i.spend_bucket === 2 ? 'bg-amber-500/20 text-amber-400' : 'bg-blue-500/20 text-blue-400'}">${bucketLabels[i.spend_bucket]}</span></td>
+                  <td class="p-3"><span class="px-2 py-0.5 rounded-lg text-xs border ${i.spend_bucket === 1 ? 'bg-red-500/20 text-red-400 border-red-500/20' : i.spend_bucket === 2 ? 'bg-amber-500/20 text-amber-400 border-amber-500/20' : 'bg-blue-500/20 text-blue-400 border-blue-500/20'}">${bucketLabels[i.spend_bucket]}</span></td>
                   <td class="p-3">₹${(i.estimated_cost || 0).toLocaleString('en-IN')}</td>
-                  <td class="p-3"><select onchange="window._updateProcStatus(${i.id}, this.value)" class="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs">
+                  <td class="p-3"><select onchange="window._updateProcStatus(${i.id}, this.value)" class="bg-slate-700/50 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-slate-300">
                     ${['planned','ordered','delivered','installed','deferred'].map(s => `<option value="${s}" ${i.status===s?'selected':''}>${s}</option>`).join('')}
                   </select></td>
-                  <td class="p-3"><button onclick="window._editProcurement(${i.id})" class="text-indigo-400 hover:text-indigo-300 text-xs"><i class="fas fa-edit"></i></button></td>
                 </tr>`).join('')}</tbody>
             </table>
           </div>
         </div>`
 
-      // Summary cards
       const buckets = summary.by_bucket
       const bucketHTML = buckets.map(b => `
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+        <div class="glass-card rounded-2xl p-5">
           <h3 class="text-sm font-semibold text-slate-400">${bucketLabels[b.spend_bucket] || 'Bucket ' + b.spend_bucket}</h3>
-          <div class="text-2xl font-bold mt-1">₹${(b.total_est || 0).toLocaleString('en-IN')}</div>
+          <div class="text-2xl font-bold mt-2 bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">₹${(b.total_est || 0).toLocaleString('en-IN')}</div>
           <div class="text-xs text-slate-500 mt-1">${b.count} items</div>
         </div>`).join('')
       $('#bucket-summary').innerHTML = bucketHTML
 
       window._updateProcStatus = async (id, status) => {
         await API.put(`/procurement/${id}`, { status })
-      }
-      window._editProcurement = (id) => {
-        alert('Edit procurement item #' + id + ' — inline editing')
-        // Full edit modal can be added here
+        toast('Procurement status updated.', 'success')
       }
 
       gsap.from('#bucket-summary > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.1 })
@@ -865,35 +1074,33 @@
     }
   }
 
-  // ============================================================
-  // PARTNERS (Venture Owner)
-  // ============================================================
+  // ── PARTNERS ─────────────────────────────────────────────
   async function renderPartners() {
     const content = $('#main-content')
     try {
       const { data: partners } = await API.get('/partners')
       const typeIcons = { vendor: 'fa-store', training_partner: 'fa-graduation-cap', rpto: 'fa-plane', industry: 'fa-industry', academic: 'fa-university', media: 'fa-newspaper', government: 'fa-landmark' }
       const typeColors = { vendor: 'text-blue-400', training_partner: 'text-emerald-400', rpto: 'text-cyan-400', industry: 'text-amber-400', academic: 'text-purple-400', media: 'text-pink-400', government: 'text-red-400' }
-      const statusColors = { active: 'bg-emerald-500/20 text-emerald-400', engaged: 'bg-blue-500/20 text-blue-400', identified: 'bg-slate-700 text-slate-400', inactive: 'bg-red-500/20 text-red-400' }
+      const statusColors = { active: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/20', engaged: 'bg-blue-500/20 text-blue-400 border-blue-500/20', identified: 'bg-slate-700/50 text-slate-400 border-slate-700/30', inactive: 'bg-red-500/20 text-red-400 border-red-500/20' }
 
       content.innerHTML = `
         <div class="space-y-6">
           <div class="flex items-center justify-between">
-            <div><h2 class="text-xl font-bold">Partner & Vendor Stack</h2><p class="text-sm text-slate-400">DGCA-aware procurement and partnership network</p></div>
-            <button id="add-partner-btn" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition"><i class="fas fa-plus mr-1"></i> Add Partner</button>
+            <div><h2 class="text-xl font-bold">Partner & Vendor Stack</h2><p class="text-sm text-slate-400">DGCA-aware procurement network</p></div>
+            <button id="add-partner-btn" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition btn-glow"><i class="fas fa-plus mr-1"></i> Add Partner</button>
           </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">${partners.map(p => `
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 hover:border-slate-700 transition">
+            <div class="glass-card rounded-2xl p-5">
               <div class="flex items-start justify-between mb-3">
                 <div class="flex items-center gap-2">
                   <i class="fas ${typeIcons[p.type] || 'fa-handshake'} ${typeColors[p.type] || 'text-slate-400'}"></i>
                   <span class="font-semibold">${p.name}</span>
                 </div>
-                <span class="text-xs px-2 py-0.5 rounded-full ${statusColors[p.status]}">${p.status}</span>
+                <span class="text-xs px-2 py-0.5 rounded-full border ${statusColors[p.status]}">${p.status}</span>
               </div>
               <p class="text-sm text-slate-400 mb-2">${p.description || '—'}</p>
               ${p.contact_info ? `<p class="text-xs text-slate-500 mb-2"><i class="fas fa-address-card mr-1"></i>${p.contact_info}</p>` : ''}
-              <select onchange="window._updatePartner(${p.id}, this.value)" class="bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs w-full">
+              <select onchange="window._updatePartner(${p.id}, this.value)" class="bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-xs w-full text-slate-300">
                 ${['identified','engaged','active','inactive'].map(s => `<option value="${s}" ${p.status===s?'selected':''}>${s}</option>`).join('')}
               </select>
             </div>`).join('')}</div>
@@ -901,6 +1108,7 @@
 
       window._updatePartner = async (id, status) => {
         await API.put(`/partners/${id}`, { status, engagement_notes: null })
+        toast('Partner status updated.', 'success')
       }
       $('#add-partner-btn').addEventListener('click', () => openPartnerForm())
 
@@ -914,40 +1122,37 @@
     showModal(`
       <form id="partner-form" class="space-y-4 text-left">
         <h3 class="text-lg font-bold">Add Partner / Vendor</h3>
-        <div><label class="text-xs text-slate-400">Name</label><input name="name" required class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1"></div>
-        <div><label class="text-xs text-slate-400">Type</label><select name="type" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1">${['vendor','training_partner','rpto','industry','academic','media','government'].map(t => `<option value="${t}">${t}</option>`).join('')}</select></div>
-        <div><label class="text-xs text-slate-400">Description</label><textarea name="description" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1"></textarea></div>
-        <div><label class="text-xs text-slate-400">Contact Info</label><input name="contact_info" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1"></div>
-        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-lg font-medium transition">Add Partner</button>
+        <div><label class="text-xs text-slate-400">Name</label><input name="name" required class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+        <div><label class="text-xs text-slate-400">Type</label><select name="type" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">${['vendor','training_partner','rpto','industry','academic','media','government'].map(t => `<option value="${t}">${t}</option>`).join('')}</select></div>
+        <div><label class="text-xs text-slate-400">Description</label><textarea name="description" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
+        <div><label class="text-xs text-slate-400">Contact</label><input name="contact_info" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></div>
+        <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow">Add Partner</button>
       </form>`)
 
     $('#partner-form').addEventListener('submit', async (e) => {
       e.preventDefault()
       const fd = new FormData(e.target)
-      const payload = Object.fromEntries(fd.entries())
-      await API.post('/partners', payload)
+      await API.post('/partners', Object.fromEntries(fd.entries()))
+      toast('Partner added!', 'success')
       closeModal()
       state.activeView = 'partners'; navigateView()
     })
   }
 
-  // ============================================================
-  // LLM SYNTHESIS (Venture Owner only)
-  // ============================================================
+  // ── LLM SYNTHESIS ────────────────────────────────────────
   async function renderLLMView() {
     const content = $('#main-content')
     content.innerHTML = `
       <div class="space-y-6">
-        <div><h2 class="text-xl font-bold">GenAI Report Synthesis</h2><p class="text-sm text-slate-400">LLM-powered synthesis of all CoE data — Venture Owner Tool</p></div>
-
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+        <div><h2 class="text-xl font-bold">GenAI Report Synthesis</h2><p class="text-sm text-slate-400">LLM-powered strategic synthesis — Venture Owner Tool</p></div>
+        <div class="glass-card rounded-2xl p-6">
           <div class="mb-4">
-            <label class="text-sm font-medium text-slate-400">OpenAI API Key <span class="text-amber-400">(stored in session only)</span></label>
-            <input id="llm-api-key" type="password" value="${state.llmApiKey || ''}" placeholder="sk-..." class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm mt-1 font-mono">
+            <label class="text-sm font-medium text-slate-400">OpenAI API Key <span class="text-amber-400 text-xs">(session only)</span></label>
+            <input id="llm-api-key" type="password" value="${state.llmApiKey || ''}" placeholder="sk-..." class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-4 py-3 text-sm mt-1 font-mono text-slate-100 placeholder-slate-500">
           </div>
           <div class="mb-4">
             <label class="text-sm font-medium text-slate-400">Report Type</label>
-            <select id="llm-report-type" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm mt-1">
+            <select id="llm-report-type" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-4 py-3 text-sm mt-1 text-slate-100">
               <option value="Executive Summary">Executive Summary</option>
               <option value="Weekly Status">Weekly Status</option>
               <option value="Monthly Review">Monthly Review</option>
@@ -956,146 +1161,133 @@
             </select>
           </div>
           <div class="mb-4">
-            <label class="text-sm font-medium text-slate-400">Focus Prompt (optional)</label>
-            <textarea id="llm-prompt" rows="2" placeholder="e.g., Focus on procurement bottlenecks and cohort progression risks..." class="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-sm mt-1"></textarea>
+            <label class="text-sm font-medium text-slate-400">Focus (optional)</label>
+            <textarea id="llm-prompt" rows="3" placeholder="e.g., Focus on procurement bottlenecks..." class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-4 py-3 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea>
           </div>
-          <button id="llm-generate-btn" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-6 py-3 rounded-lg font-medium transition flex items-center gap-2">
+          <button id="llm-generate-btn" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-6 py-3 rounded-xl font-medium transition btn-glow flex items-center gap-2">
             <i class="fas fa-robot"></i> Generate Synthesis
           </button>
           <div id="llm-output" class="mt-6 hidden">
             <div class="flex items-center justify-between mb-3">
               <h3 class="font-semibold"><i class="fas fa-file-alt text-indigo-400 mr-2"></i>Synthesis Output</h3>
-              <button id="save-llm-report-btn" class="bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1 rounded text-xs transition"><i class="fas fa-save mr-1"></i>Save as Report</button>
+              <button id="save-llm-report-btn" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-3 py-1.5 rounded-lg text-xs transition"><i class="fas fa-save mr-1"></i>Save as Report</button>
             </div>
-            <div id="llm-content" class="bg-slate-800 rounded-lg p-4 text-sm prose prose-invert max-h-96 overflow-y-auto whitespace-pre-wrap"></div>
+            <div id="llm-content" class="bg-slate-800/60 rounded-xl p-5 text-sm prose prose-invert max-h-96 overflow-y-auto whitespace-pre-wrap border border-slate-700/30"></div>
           </div>
         </div>
       </div>`
 
     $('#llm-generate-btn').addEventListener('click', async () => {
       const apiKey = $('#llm-api-key').value.trim()
-      if (!apiKey) return alert('Please enter your OpenAI API key.')
+      if (!apiKey) return toast('Please enter your OpenAI API key.', 'error')
       state.llmApiKey = apiKey
-
       const btn = $('#llm-generate-btn')
       btn.disabled = true
       btn.innerHTML = '<i class="fas fa-spinner animate-spin"></i> Generating...'
-
       try {
         const { data } = await API.post('/llm/synthesize', {
-          api_key: apiKey,
-          prompt: $('#llm-prompt').value.trim(),
-          report_type: $('#llm-report-type').value
+          api_key: apiKey, prompt: $('#llm-prompt').value.trim(), report_type: $('#llm-report-type').value
         })
-
         const output = $('#llm-output')
         output.classList.remove('hidden')
         $('#llm-content').textContent = data.synthesis
         gsap.from(output, { y: 20, opacity: 0, duration: 0.5 })
-
-        // Save button
         $('#save-llm-report-btn').onclick = async () => {
           await API.post('/reports/saved', {
             title: `LLM ${$('#llm-report-type').value} — ${dayjs().format('YYYY-MM-DD HH:mm')}`,
-            report_type: 'llm_synthesis',
-            content: data.synthesis
+            report_type: 'llm_synthesis', content: data.synthesis
           })
-          alert('Report saved! View in Reports → Saved Reports.')
+          toast('Report saved! View in Reports → Saved.', 'success')
         }
       } catch (e) {
-        alert('LLM synthesis failed: ' + (e.response?.data?.error || e.message))
+        toast('LLM synthesis failed: ' + (e.response?.data?.error || e.message), 'error')
       }
-
       btn.disabled = false
       btn.innerHTML = '<i class="fas fa-robot"></i> Generate Synthesis'
     })
   }
 
-  // ============================================================
-  // ADMIN VIEW (Venture Owner)
-  // ============================================================
+  // ── ADMIN ────────────────────────────────────────────────
   async function renderAdminView() {
     const content = $('#main-content')
     try {
       const { data: codes } = await API.get('/auth/codes')
       content.innerHTML = `
         <div class="space-y-6">
-          <div><h2 class="text-xl font-bold">Administration</h2><p class="text-sm text-slate-400">Manage access codes, system settings</p></div>
-          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+          <div><h2 class="text-xl font-bold">Administration</h2><p class="text-sm text-slate-400">Manage access codes and system settings</p></div>
+          <div class="glass-card rounded-2xl p-6">
             <h3 class="font-semibold mb-4">Access Passcodes</h3>
             <div class="overflow-x-auto">
               <table class="w-full text-sm">
                 <thead><tr class="text-slate-500 text-left"><th class="p-2">Role</th><th class="p-2">Passcode</th><th class="p-2">Label</th><th class="p-2">Active</th><th class="p-2">Created</th></tr></thead>
                 <tbody>${codes.map(c => `
-                  <tr class="border-t border-slate-800">
-                    <td class="p-2"><span class="px-2 py-0.5 rounded text-xs ${c.role === 'venture_owner' ? 'bg-amber-500/20 text-amber-400' : 'bg-indigo-500/20 text-indigo-400'}">${c.role}</span></td>
+                  <tr class="border-t border-slate-800/50">
+                    <td class="p-2"><span class="px-2 py-0.5 rounded-lg text-xs border ${c.role === 'venture_owner' ? 'bg-amber-500/20 text-amber-400 border-amber-500/20' : 'bg-indigo-500/20 text-indigo-400 border-indigo-500/20'}">${c.role}</span></td>
                     <td class="p-2 font-mono text-xs">${c.passcode}</td>
                     <td class="p-2 text-slate-400">${c.label}</td>
-                    <td class="p-2"><button onclick="window._toggleCode(${c.id}, ${c.is_active ? 0 : 1})" class="text-xs px-2 py-0.5 rounded ${c.is_active ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}">${c.is_active ? 'Active' : 'Disabled'}</button></td>
+                    <td class="p-2"><button onclick="window._toggleCode(${c.id}, ${c.is_active ? 0 : 1})" class="text-xs px-2 py-1 rounded-lg border ${c.is_active ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/20' : 'bg-red-500/20 text-red-400 border-red-500/20'}">${c.is_active ? 'Active' : 'Disabled'}</button></td>
                     <td class="p-2 text-xs text-slate-500">${c.created_at || ''}</td>
                   </tr>`).join('')}</tbody>
               </table>
             </div>
-            <button id="add-code-btn" class="mt-4 bg-slate-700 hover:bg-slate-600 text-slate-300 px-4 py-2 rounded-lg text-sm transition"><i class="fas fa-plus mr-1"></i> New Passcode</button>
+            <button id="add-code-btn" class="mt-4 bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-4 py-2 rounded-xl text-sm transition"><i class="fas fa-plus mr-1"></i> New Passcode</button>
           </div>
         </div>`
 
       window._toggleCode = async (id, active) => {
         await API.put(`/auth/codes/${id}`, { is_active: active })
+        toast('Passcode toggled.', 'success')
         state.activeView = 'admin'; navigateView()
       }
-
       $('#add-code-btn').addEventListener('click', () => {
         showModal(`
           <form id="code-form" class="space-y-4 text-left">
             <h3 class="text-lg font-bold">New Access Code</h3>
-            <div><label class="text-xs text-slate-400">Role</label><select name="role" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1"><option value="coe_leader">CoE Leader</option><option value="venture_owner">Venture Owner</option></select></div>
-            <div><label class="text-xs text-slate-400">Passcode</label><input name="passcode" required class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1"></div>
-            <div><label class="text-xs text-slate-400">Label</label><input name="label" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm mt-1"></div>
-            <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-lg">Create</button>
+            <div><label class="text-xs text-slate-400">Role</label><select name="role" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"><option value="coe_leader">CoE Leader</option><option value="venture_owner">Venture Owner</option></select></div>
+            <div><label class="text-xs text-slate-400">Passcode</label><input name="passcode" required class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+            <div><label class="text-xs text-slate-400">Label</label><input name="label" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+            <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow">Create</button>
           </form>`)
         $('#code-form').addEventListener('submit', async (e) => {
           e.preventDefault()
           const fd = new FormData(e.target)
           await API.post('/auth/codes', Object.fromEntries(fd.entries()))
+          toast('New passcode created!', 'success')
           closeModal()
           state.activeView = 'admin'; navigateView()
         })
       })
 
-      gsap.from('#main-content .bg-slate-900', { y: 20, opacity: 0, duration: 0.4 })
+      gsap.from('#main-content .glass-card', { y: 20, opacity: 0, duration: 0.4 })
     } catch (e) {
       content.innerHTML = errorHtml('admin', e)
     }
   }
 
-  // ============================================================
-  // SHARED REPORT VIEW
-  // ============================================================
+  // ── SHARED REPORT VIEW ───────────────────────────────────
   async function renderSharedView(token) {
-    root.innerHTML = '<div class="min-h-screen flex items-center justify-center"><i class="fas text-2xl text-indigo-400 fa-spinner"></i></div>'
+    root.innerHTML = '<div class="min-h-screen flex items-center justify-center"><div class="flex flex-col items-center gap-3"><div class="w-10 h-10 border-2 border-indigo-500/30 border-t-indigo-400 rounded-full animate-spin"></div><p class="text-sm text-slate-500">Loading shared report...</p></div></div>'
     try {
       const { data } = await API.get(`/reports/shared/${token}`)
-      if (data.error) { root.innerHTML = `<div class="min-h-screen flex items-center justify-center"><div class="text-center"><p class="text-red-400 text-xl mb-2">Report Not Found</p><p class="text-slate-500">This shared link is invalid or has expired.</p></div></div>`; return }
-
+      if (data.error) { root.innerHTML = `<div class="min-h-screen flex items-center justify-center"><div class="glass-card rounded-2xl p-10 text-center"><p class="text-red-400 text-xl mb-2">Report Not Found</p><p class="text-slate-500">This shared link is invalid or has expired.</p></div></div>`; return }
       root.innerHTML = `
         <main class="max-w-4xl mx-auto px-4 sm:px-6 py-12">
-          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-8">
+          <div class="glass-card rounded-2xl p-8">
             <div class="flex items-center gap-3 mb-6">
-              <span class="text-3xl">🛸</span>
+              <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500/30 to-cyan-500/30 flex items-center justify-center border border-indigo-500/20">
+                <i class="fas fa-drone text-indigo-400"></i>
+              </div>
               <div><h1 class="text-2xl font-bold">${data.title}</h1><p class="text-sm text-slate-400">SRM dROIds CoE — ${data.report_type} &middot; ${data.created_at || ''}</p></div>
             </div>
-            <div class="bg-slate-800 rounded-xl p-6 whitespace-pre-wrap text-slate-300 text-sm leading-relaxed">${data.content || 'No content.'}</div>
+            <div class="bg-slate-800/60 rounded-xl p-6 whitespace-pre-wrap text-slate-300 text-sm leading-relaxed border border-slate-700/30">${data.content || 'No content.'}</div>
           </div>
         </main>`
     } catch {
-      root.innerHTML = '<div class="min-h-screen flex items-center justify-center"><p class="text-red-400">Failed to load shared report.</p></div>'
+      root.innerHTML = '<div class="min-h-screen flex items-center justify-center"><div class="glass-card rounded-2xl p-10 text-center"><p class="text-red-400 text-xl mb-2">Error</p><p class="text-slate-500">Failed to load shared report.</p></div></div>'
     }
   }
 
-  // ============================================================
-  // UTILITY: Modal
-  // ============================================================
+  // ── MODAL ────────────────────────────────────────────────
   function showModal(html) {
     const existing = $('#global-modal')
     if (existing) existing.remove()
@@ -1103,7 +1295,7 @@
     modal.id = 'global-modal'
     modal.className = 'fixed inset-0 z-50 flex items-center justify-center p-4'
     modal.innerHTML = `<div class="absolute inset-0 bg-black/60 backdrop-blur-sm" id="modal-backdrop"></div>
-      <div class="relative bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl">${html}</div>`
+      <div class="relative glass-card border-slate-700/50 rounded-2xl p-6 w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl">${html}</div>`
     document.body.appendChild(modal)
     gsap.from(modal.querySelector('.relative'), { scale: 0.95, opacity: 0, duration: 0.25 })
     $('#modal-backdrop').addEventListener('click', closeModal)
@@ -1114,38 +1306,29 @@
     if (modal) { gsap.to(modal.querySelector('.relative'), { scale: 0.95, opacity: 0, duration: 0.15, onComplete: () => modal.remove() }) }
   }
 
-  // ============================================================
-  // UTILITY: Download CSV
-  // ============================================================
+  // ── DOWNLOAD CSV ─────────────────────────────────────────
   function downloadCSV(type) {
     window.open(`/api/export/csv/${type}`, '_blank')
   }
 
-  // ============================================================
-  // UTILITY: Share report
-  // ============================================================
+  // ── SHARE REPORT ─────────────────────────────────────────
   window._shareReport = async (title, content) => {
     const { data } = await API.post('/reports/saved', { title, report_type: 'custom', content })
     const url = window.location.origin + '/#share/' + data.share_token
     await navigator.clipboard.writeText(url)
-    alert('Share link copied! Anyone with this link can view the report.\n\n' + url)
+    toast('Share link copied! Anyone can view this report.', 'success')
   }
   window._copyShareLink = async (token) => {
     const url = window.location.origin + '/#share/' + token
     await navigator.clipboard.writeText(url)
-    alert('Share link copied!\n\n' + url)
+    toast('Share link copied!', 'success')
   }
 
-  // ============================================================
-  // UTILITY: Error
-  // ============================================================
+  // ── ERROR ────────────────────────────────────────────────
   function errorHtml(section, e) {
-    return `<div class="bg-red-500/10 border border-red-500/30 rounded-2xl p-6 text-center"><p class="text-red-400">Failed to load ${section}</p><p class="text-xs text-red-500/60 mt-1">${e.message || 'Unknown error'}</p><button onclick="location.reload()" class="mt-3 bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg text-sm transition">Retry</button></div>`
+    return `<div class="glass-card border-red-500/30 rounded-2xl p-8 text-center"><i class="fas fa-exclamation-triangle text-2xl text-red-400/60 mb-3"></i><p class="text-red-400">Failed to load ${section}</p><p class="text-xs text-red-500/60 mt-1">${e.message || 'Unknown error'}</p><button onclick="location.reload()" class="mt-4 bg-slate-700/50 hover:bg-slate-600 border border-slate-700 px-4 py-2 rounded-xl text-sm transition">Retry</button></div>`
   }
 
-  // ============================================================
-  // BOOT
-  // ============================================================
+  // ── BOOT ─────────────────────────────────────────────────
   init()
-
 })()
