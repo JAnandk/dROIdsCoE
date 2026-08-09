@@ -677,6 +677,312 @@ app.put('/api/submissions/report/:id', async (c) => {
 })
 
 // ============================================================
+// FOUNDATIONAL SETUP TRACKER (v3)
+// Stage-by-stage: Planning → Design → Procurement → Deployment → Readiness
+// CoE Director manages line items (Excel-like), submits sections for
+// Venture Leader review; Venture Leader approves / requests changes /
+// logs decisions & next-step guidance.
+// ============================================================
+
+// Full tracker tree: stages → sections (with guidelines) → line items
+app.get('/api/tracker', async (c) => {
+  const db = c.env.DB
+  const [stages, sections, guidelines, items] = await Promise.all([
+    db.prepare('SELECT * FROM setup_stages ORDER BY sort_order').all(),
+    db.prepare('SELECT * FROM setup_sections ORDER BY sort_order').all(),
+    db.prepare('SELECT * FROM setup_guidelines ORDER BY sort_order').all(),
+    db.prepare('SELECT * FROM setup_line_items ORDER BY sort_order, id').all()
+  ])
+  const glBySection: Record<number, any[]> = {}
+  for (const g of guidelines.results as any[]) {
+    (glBySection[g.section_id] = glBySection[g.section_id] || []).push(g)
+  }
+  const itemsBySection: Record<number, any[]> = {}
+  for (const it of items.results as any[]) {
+    (itemsBySection[it.section_id] = itemsBySection[it.section_id] || []).push(it)
+  }
+  const sectionsByStage: Record<number, any[]> = {}
+  for (const s of sections.results as any[]) {
+    const secItems = itemsBySection[s.id] || []
+    const total = secItems.length
+    const done = secItems.filter(i => i.status === 'done').length
+    const avgProgress = total > 0 ? Math.round(secItems.reduce((a, i) => a + (i.progress_pct || 0), 0) / total) : 0
+    const estCost = secItems.reduce((a, i) => a + (i.estimated_cost || 0), 0)
+    ;(sectionsByStage[s.stage_id] = sectionsByStage[s.stage_id] || []).push({
+      ...s,
+      guidelines: glBySection[s.id] || [],
+      line_items: secItems,
+      stats: { total, done, avg_progress: avgProgress, est_cost: estCost }
+    })
+  }
+  const stageList = (stages.results as any[]).map(st => {
+    const stageSections = sectionsByStage[st.id] || []
+    const totalItems = stageSections.reduce((a, s) => a + s.stats.total, 0)
+    const doneItems = stageSections.reduce((a, s) => a + s.stats.done, 0)
+    const avgProgress = totalItems > 0
+      ? Math.round(stageSections.reduce((a, s) => a + s.stats.avg_progress * s.stats.total, 0) / totalItems) : 0
+    return {
+      ...st,
+      sections: stageSections,
+      stats: {
+        total_items: totalItems,
+        done_items: doneItems,
+        avg_progress: avgProgress,
+        est_cost: stageSections.reduce((a, s) => a + s.stats.est_cost, 0)
+      }
+    }
+  })
+  const totalItems = stageList.reduce((a, s) => a + s.stats.total_items, 0)
+  const overallProgress = totalItems > 0
+    ? Math.round(stageList.reduce((a, s) => a + s.stats.avg_progress * s.stats.total_items, 0) / totalItems) : 0
+  return c.json({ stages: stageList, overall_progress: overallProgress, total_items: totalItems })
+})
+
+// Bird's-eye analytics: per stage/section/priority/status/approvals
+app.get('/api/tracker/analytics', async (c) => {
+  const db = c.env.DB
+  const [byStatus, byPriority, byStage, byReview, costByStage, pendingSubs, blockedItems] = await Promise.all([
+    db.prepare('SELECT status, COUNT(*) as count FROM setup_line_items GROUP BY status').all(),
+    db.prepare('SELECT priority, COUNT(*) as count FROM setup_line_items GROUP BY priority').all(),
+    db.prepare(`SELECT st.id, st.name, st.sort_order,
+        COUNT(li.id) as total,
+        SUM(CASE WHEN li.status='done' THEN 1 ELSE 0 END) as done,
+        SUM(CASE WHEN li.status IN ('blocked','at_risk') THEN 1 ELSE 0 END) as risk,
+        SUM(COALESCE(li.estimated_cost,0)) as est_cost,
+        SUM(COALESCE(li.actual_cost,0)) as actual_cost,
+        COALESCE(AVG(li.progress_pct),0) as avg_progress
+      FROM setup_stages st
+      LEFT JOIN setup_sections s ON s.stage_id = st.id
+      LEFT JOIN setup_line_items li ON li.section_id = s.id
+      GROUP BY st.id ORDER BY st.sort_order`).all(),
+    db.prepare('SELECT review_status, COUNT(*) as count FROM setup_line_items GROUP BY review_status').all(),
+    db.prepare(`SELECT st.name as stage, SUM(COALESCE(li.estimated_cost,0)) as est, SUM(COALESCE(li.actual_cost,0)) as actual
+      FROM setup_line_items li
+      JOIN setup_sections s ON li.section_id = s.id
+      JOIN setup_stages st ON s.stage_id = st.id
+      GROUP BY st.id ORDER BY st.sort_order`).all(),
+    db.prepare('SELECT COUNT(*) as c FROM setup_submissions WHERE status = \'pending_review\'').first<{c:number}>(),
+    db.prepare(`SELECT li.*, s.title as section_title, st.name as stage_name
+      FROM setup_line_items li
+      JOIN setup_sections s ON li.section_id = s.id
+      JOIN setup_stages st ON s.stage_id = st.id
+      WHERE li.status IN ('blocked','at_risk') ORDER BY li.priority DESC LIMIT 20`).all()
+  ])
+  return c.json({
+    by_status: byStatus.results, by_priority: byPriority.results,
+    by_stage: byStage.results, by_review: byReview.results,
+    cost_by_stage: costByStage.results,
+    pending_submissions: pendingSubs?.c || 0,
+    risk_items: blockedItems.results
+  })
+})
+
+// ── Sections CRUD ──────────────────────────────────────────
+app.post('/api/tracker/sections', async (c) => {
+  const { stage_id, title, description, guideline_summary, owner_role, sort_order } = await c.req.json()
+  if (!stage_id || !title) return c.json({ error: 'stage_id and title required' }, 400)
+  const r = await c.env.DB.prepare(
+    'INSERT INTO setup_sections (stage_id, title, description, guideline_summary, owner_role, sort_order) VALUES (?,?,?,?,?,?)'
+  ).bind(stage_id, title, description || '', guideline_summary || '', owner_role || 'coe_leader', sort_order || 99).run()
+  return c.json({ ok: true, id: r.meta.last_row_id })
+})
+
+app.put('/api/tracker/sections/:id', async (c) => {
+  const id = c.req.param('id')
+  const b = await c.req.json()
+  await c.env.DB.prepare(
+    `UPDATE setup_sections SET title = COALESCE(?, title), description = COALESCE(?, description),
+     guideline_summary = COALESCE(?, guideline_summary), status = COALESCE(?, status),
+     sort_order = COALESCE(?, sort_order), updated_at = datetime('now') WHERE id = ?`
+  ).bind(b.title ?? null, b.description ?? null, b.guideline_summary ?? null, b.status ?? null, b.sort_order ?? null, id).run()
+  return c.json({ ok: true })
+})
+
+// ── Guidelines CRUD (best-practice tooltips per section) ──
+app.post('/api/tracker/guidelines', async (c) => {
+  const { section_id, tip, sort_order } = await c.req.json()
+  if (!section_id || !tip) return c.json({ error: 'section_id and tip required' }, 400)
+  const r = await c.env.DB.prepare(
+    'INSERT INTO setup_guidelines (section_id, tip, sort_order) VALUES (?,?,?)'
+  ).bind(section_id, tip, sort_order || 99).run()
+  return c.json({ ok: true, id: r.meta.last_row_id })
+})
+
+app.delete('/api/tracker/guidelines/:id', async (c) => {
+  await c.env.DB.prepare('DELETE FROM setup_guidelines WHERE id = ?').bind(c.req.param('id')).run()
+  return c.json({ ok: true })
+})
+
+// ── Line items CRUD (Excel-like rows) ─────────────────────
+app.post('/api/tracker/items', async (c) => {
+  const b = await c.req.json()
+  if (!b.section_id || !b.item_name) return c.json({ error: 'section_id and item_name required' }, 400)
+  const r = await c.env.DB.prepare(
+    `INSERT INTO setup_line_items (section_id, item_name, description, stakeholder, quantity_notes, vendor,
+      priority, estimated_cost, actual_cost, progress_pct, status, action_item, due_date, notes, sort_order)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(b.section_id, b.item_name, b.description || '', b.stakeholder || '', b.quantity_notes || '',
+    b.vendor || '', b.priority || 'medium', b.estimated_cost || 0, b.actual_cost || 0,
+    b.progress_pct || 0, b.status || 'not_started', b.action_item || '', b.due_date || '', b.notes || '',
+    b.sort_order || 99).run()
+  return c.json({ ok: true, id: r.meta.last_row_id })
+})
+
+app.put('/api/tracker/items/:id', async (c) => {
+  const id = c.req.param('id')
+  const b = await c.req.json()
+  await c.env.DB.prepare(
+    `UPDATE setup_line_items SET item_name = COALESCE(?, item_name), description = COALESCE(?, description),
+     stakeholder = COALESCE(?, stakeholder), quantity_notes = COALESCE(?, quantity_notes),
+     vendor = COALESCE(?, vendor), priority = COALESCE(?, priority),
+     estimated_cost = COALESCE(?, estimated_cost), actual_cost = COALESCE(?, actual_cost),
+     progress_pct = COALESCE(?, progress_pct), status = COALESCE(?, status),
+     action_item = COALESCE(?, action_item), due_date = COALESCE(?, due_date), notes = COALESCE(?, notes),
+     review_status = COALESCE(?, review_status), reviewer_notes = COALESCE(?, reviewer_notes),
+     updated_at = datetime('now') WHERE id = ?`
+  ).bind(b.item_name ?? null, b.description ?? null, b.stakeholder ?? null, b.quantity_notes ?? null,
+    b.vendor ?? null, b.priority ?? null, b.estimated_cost ?? null, b.actual_cost ?? null,
+    b.progress_pct ?? null, b.status ?? null, b.action_item ?? null, b.due_date ?? null, b.notes ?? null,
+    b.review_status ?? null, b.reviewer_notes ?? null, id).run()
+  return c.json({ ok: true })
+})
+
+app.delete('/api/tracker/items/:id', async (c) => {
+  await c.env.DB.prepare('DELETE FROM setup_line_items WHERE id = ?').bind(c.req.param('id')).run()
+  return c.json({ ok: true })
+})
+
+// ── Governance workflow: submit section → review ──────────
+// CoE Director submits a whole section (all its items) for Venture Leader review
+app.post('/api/tracker/submit', async (c) => {
+  const { section_id, notes } = await c.req.json()
+  if (!section_id) return c.json({ error: 'section_id required' }, 400)
+  const db = c.env.DB
+  const items = await db.prepare(
+    'SELECT id FROM setup_line_items WHERE section_id = ?'
+  ).bind(section_id).all()
+  const ids = (items.results as any[]).map(i => i.id)
+  if (ids.length === 0) return c.json({ error: 'No line items in this section to submit' }, 400)
+  const r = await db.prepare(
+    `INSERT INTO setup_submissions (section_id, line_item_ids, status, notes, submitted_by)
+     VALUES (?, ?, 'pending_review', ?, 'coe_leader')`
+  ).bind(section_id, JSON.stringify(ids), notes || '').run()
+  // Mark items + section as submitted
+  await db.prepare(
+    `UPDATE setup_line_items SET review_status = 'submitted', submitted_by = 'coe_leader', updated_at = datetime('now') WHERE section_id = ?`
+  ).bind(section_id).run()
+  await db.prepare(
+    `UPDATE setup_sections SET status = 'submitted', updated_at = datetime('now') WHERE id = ?`
+  ).bind(section_id).run()
+  return c.json({ ok: true, id: r.meta.last_row_id, item_count: ids.length })
+})
+
+// List submissions (filterable by status)
+app.get('/api/tracker/submissions', async (c) => {
+  const status = c.req.query('status')
+  const base = `SELECT sub.*, s.title as section_title, st.name as stage_name
+    FROM setup_submissions sub
+    JOIN setup_sections s ON sub.section_id = s.id
+    JOIN setup_stages st ON s.stage_id = st.id`
+  const rows = status
+    ? await c.env.DB.prepare(`${base} WHERE sub.status = ? ORDER BY sub.created_at DESC LIMIT 100`).bind(status).all()
+    : await c.env.DB.prepare(`${base} ORDER BY sub.created_at DESC LIMIT 100`).all()
+  return c.json((rows.results as any[]).map(r => ({ ...r, line_item_ids: JSON.parse(r.line_item_ids || '[]') })))
+})
+
+// Venture Leader reviews: approve / request changes (with edit instructions)
+app.put('/api/tracker/submissions/:id', async (c) => {
+  const id = c.req.param('id')
+  const { action, reviewer_notes } = await c.req.json()
+  const db = c.env.DB
+  const sub = await db.prepare('SELECT * FROM setup_submissions WHERE id = ?').bind(id).first<{
+    id: number; section_id: number; status: string
+  }>()
+  if (!sub) return c.json({ error: 'Submission not found' }, 404)
+
+  if (action === 'approve') {
+    await db.prepare(
+      `UPDATE setup_submissions SET status = 'approved', reviewer_notes = ?, reviewed_by = 'venture_leader', reviewed_at = datetime('now') WHERE id = ?`
+    ).bind(reviewer_notes || '', id).run()
+    await db.prepare(
+      `UPDATE setup_line_items SET review_status = 'approved', reviewer_notes = ?, reviewed_by = 'venture_leader', reviewed_at = datetime('now'), updated_at = datetime('now') WHERE section_id = ? AND review_status = 'submitted'`
+    ).bind(reviewer_notes || '', sub.section_id).run()
+    await db.prepare(
+      `UPDATE setup_sections SET status = 'approved', updated_at = datetime('now') WHERE id = ?`
+    ).bind(sub.section_id).run()
+  } else if (action === 'request_changes') {
+    await db.prepare(
+      `UPDATE setup_submissions SET status = 'changes_requested', reviewer_notes = ?, reviewed_by = 'venture_leader', reviewed_at = datetime('now') WHERE id = ?`
+    ).bind(reviewer_notes || 'Changes requested.', id).run()
+    await db.prepare(
+      `UPDATE setup_line_items SET review_status = 'changes_requested', reviewer_notes = ?, reviewed_by = 'venture_leader', reviewed_at = datetime('now'), updated_at = datetime('now') WHERE section_id = ? AND review_status = 'submitted'`
+    ).bind(reviewer_notes || 'Changes requested.', sub.section_id).run()
+    await db.prepare(
+      `UPDATE setup_sections SET status = 'changes_requested', updated_at = datetime('now') WHERE id = ?`
+    ).bind(sub.section_id).run()
+  } else {
+    return c.json({ error: 'Invalid action. Use: approve or request_changes' }, 400)
+  }
+  return c.json({ ok: true })
+})
+
+// Per-line-item review (Venture Leader approves or sends edit instruction on one row)
+app.put('/api/tracker/items/:id/review', async (c) => {
+  const id = c.req.param('id')
+  const { action, reviewer_notes } = await c.req.json()
+  if (action !== 'approve' && action !== 'request_changes') {
+    return c.json({ error: 'Invalid action. Use: approve or request_changes' }, 400)
+  }
+  const newStatus = action === 'approve' ? 'approved' : 'changes_requested'
+  await c.env.DB.prepare(
+    `UPDATE setup_line_items SET review_status = ?, reviewer_notes = ?, reviewed_by = 'venture_leader',
+     reviewed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
+  ).bind(newStatus, reviewer_notes || '', id).run()
+  return c.json({ ok: true })
+})
+
+// ── Decision & action log (joint decisions, next-step guidance) ──
+app.get('/api/tracker/decisions', async (c) => {
+  const rows = await c.env.DB.prepare(
+    `SELECT d.*, s.title as section_title, li.item_name
+     FROM setup_decisions d
+     LEFT JOIN setup_sections s ON d.section_id = s.id
+     LEFT JOIN setup_line_items li ON d.line_item_id = li.id
+     ORDER BY d.created_at DESC LIMIT 100`
+  ).all()
+  return c.json(rows.results)
+})
+
+app.post('/api/tracker/decisions', async (c) => {
+  const { section_id, line_item_id, decision, next_steps, decided_by, decision_date } = await c.req.json()
+  if (!decision) return c.json({ error: 'decision text required' }, 400)
+  const r = await c.env.DB.prepare(
+    'INSERT INTO setup_decisions (section_id, line_item_id, decision, next_steps, decided_by, decision_date) VALUES (?,?,?,?,?,?)'
+  ).bind(section_id || null, line_item_id || null, decision, next_steps || '', decided_by || 'venture_leader', decision_date || new Date().toISOString().slice(0, 10)).run()
+  return c.json({ ok: true, id: r.meta.last_row_id })
+})
+
+// CSV export of the full tracker (bird's-eye view)
+app.get('/api/tracker/export/csv', async (c) => {
+  const rows = await c.env.DB.prepare(
+    `SELECT st.name as stage, s.title as section, li.item_name, li.stakeholder, li.quantity_notes,
+            li.vendor, li.priority, li.estimated_cost, li.actual_cost, li.progress_pct, li.status,
+            li.action_item, li.due_date, li.review_status, li.notes
+     FROM setup_line_items li
+     JOIN setup_sections s ON li.section_id = s.id
+     JOIN setup_stages st ON s.stage_id = st.id
+     ORDER BY st.sort_order, s.sort_order, li.sort_order, li.id`
+  ).all()
+  const headers = ['stage','section','item_name','stakeholder','quantity_notes','vendor','priority','estimated_cost','actual_cost','progress_pct','status','action_item','due_date','review_status','notes']
+  const csv = [headers.join(','), ...(rows.results as any[]).map(row =>
+    headers.map(h => `"${String(row[h] ?? '').replace(/"/g, '""')}"`).join(',')
+  )].join('\n')
+  return new Response(csv, {
+    headers: { 'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename="foundational_setup_tracker.csv"' }
+  })
+})
+
+// ============================================================
 // EXPORT / DOWNLOAD
 // ============================================================
 app.get('/api/export/csv/:type', async (c) => {

@@ -14,8 +14,13 @@
     charts: {},
     threeScene: null,
     facilityCampus: 'ramapuram',
-    reviewFilter: 'pending_review'
+    reviewFilter: 'pending_review',
+    setupTab: 'tracker',
+    setupStageId: 0
   }
+
+  // Lookup cache for tracker entities (sections/items by id)
+  let setupCache = { stages: [], sections: {}, items: {}, submissions: [] }
 
   const API = axios.create({ baseURL: '/api' })
   const $ = (s) => document.querySelector(s)
@@ -142,6 +147,7 @@
     const tabs = isVenture
       ? [
           { id: 'dashboard', icon: 'fa-chart-pie', label: 'Dashboard' },
+          { id: 'setup', icon: 'fa-layer-group', label: 'Setup Tracker' },
           { id: 'review', icon: 'fa-clipboard-check', label: 'Review' },
           { id: 'procurement', icon: 'fa-truck', label: 'Procurement' },
           { id: 'partners', icon: 'fa-handshake', label: 'Partners' },
@@ -151,6 +157,7 @@
         ]
       : [
           { id: 'dashboard', icon: 'fa-chart-pie', label: 'Dashboard' },
+          { id: 'setup', icon: 'fa-layer-group', label: 'Setup Tracker' },
           { id: 'cohorts', icon: 'fa-users', label: 'Cohorts' },
           { id: 'facility', icon: 'fa-cube', label: 'Facility' },
           { id: 'reports', icon: 'fa-file-alt', label: 'Reports' },
@@ -190,6 +197,7 @@
 
     switch (state.activeView) {
       case 'dashboard': renderDashboard(); break
+      case 'setup': renderSetupTracker(); break
       case 'review': renderReviewView(); break
       case 'cohorts': renderCohorts(); break
       case 'facility': renderFacilityView(); break
@@ -1262,6 +1270,826 @@
     } catch (e) {
       content.innerHTML = errorHtml('admin', e)
     }
+  }
+
+  // ============================================================
+  // ── FOUNDATIONAL SETUP TRACKER (v3) ───────────────────────
+  // Stage-by-stage tracker: Planning → Design → Procurement →
+  // Deployment → Readiness. Excel-like line items under section
+  // headers, best-practice tooltips, CoE Director → Venture
+  // Leader governance workflow, analytics & decision log.
+  // ============================================================
+  const SETUP_STATUS_COLORS = {
+    not_started: 'bg-slate-700/50 text-slate-400 border-slate-700/30',
+    in_progress: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/20',
+    blocked: 'bg-red-500/20 text-red-400 border-red-500/20',
+    at_risk: 'bg-amber-500/20 text-amber-400 border-amber-500/20',
+    done: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/20',
+    deferred: 'bg-slate-600/30 text-slate-500 border-slate-600/30',
+    submitted: 'bg-blue-500/20 text-blue-400 border-blue-500/20',
+    under_review: 'bg-blue-500/20 text-blue-400 border-blue-500/20',
+    approved: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/20',
+    changes_requested: 'bg-orange-500/20 text-orange-400 border-orange-500/20',
+    completed: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/20',
+    pending: 'bg-slate-700/50 text-slate-400 border-slate-700/30',
+    draft: 'bg-slate-700/50 text-slate-400 border-slate-700/30',
+    pending_review: 'bg-amber-500/20 text-amber-400 border-amber-500/20'
+  }
+  const SETUP_PRIORITY_COLORS = {
+    critical: 'bg-red-500/20 text-red-400 border-red-500/20',
+    high: 'bg-amber-500/20 text-amber-400 border-amber-500/20',
+    medium: 'bg-blue-500/20 text-blue-400 border-blue-500/20',
+    low: 'bg-slate-700/50 text-slate-400 border-slate-700/30'
+  }
+  const fmtINR = (n) => '₹' + (Number(n) || 0).toLocaleString('en-IN')
+
+  async function renderSetupTracker() {
+    const content = $('#main-content')
+    const isVenture = state.role === 'venture_owner'
+    try {
+      const { data: tracker } = await API.get('/tracker')
+      const { data: analytics } = await API.get('/tracker/analytics')
+      const { data: submissions } = await API.get('/tracker/submissions')
+      const { data: decisions } = await API.get('/tracker/decisions')
+
+      // rebuild lookup cache
+      setupCache = { stages: tracker.stages, sections: {}, items: {}, submissions, decisions, analytics }
+      tracker.stages.forEach(st => st.sections.forEach(sec => {
+        setupCache.sections[sec.id] = sec
+        sec.line_items.forEach(it => { setupCache.items[it.id] = it })
+      }))
+
+      const tabs = [
+        { id: 'tracker', icon: 'fa-table', label: 'Tracker Board' },
+        ...(isVenture ? [{ id: 'reviewq', icon: 'fa-clipboard-check', label: `Review Queue (${analytics.pending_submissions})` }] : []),
+        { id: 'analytics', icon: 'fa-chart-pie', label: 'Analytics' },
+        { id: 'decisions', icon: 'fa-gavel', label: `Decision Log (${decisions.length})` }
+      ]
+      if (!isVenture && state.setupTab === 'reviewq') state.setupTab = 'tracker'
+
+      content.innerHTML = `
+        <div class="space-y-6">
+          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h2 class="text-xl font-bold">Foundational Setup Tracker</h2>
+              <p class="text-sm text-slate-400">${isVenture
+                ? 'Bird\'s-eye view of the CoE setup — review submissions, guide next steps, take decisions'
+                : 'Build the CoE foundation line by line — planning, design, procurement, deployment, readiness'}</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <div class="text-right mr-2">
+                <div class="text-xs text-slate-500">Overall Setup Progress</div>
+                <div class="text-lg font-extrabold bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">${tracker.overall_progress}%</div>
+              </div>
+              <button id="setup-export-btn" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-4 py-2 rounded-xl text-sm font-medium transition"><i class="fas fa-download mr-1"></i> Export CSV</button>
+            </div>
+          </div>
+          <div class="flex gap-1 bg-slate-900/60 rounded-xl p-1 w-fit border border-slate-800 flex-wrap">
+            ${tabs.map(t => `<button class="setup-tab px-4 py-2 rounded-lg text-sm font-medium transition ${state.setupTab === t.id ? 'bg-indigo-600/20 text-indigo-400' : 'text-slate-400 hover:text-slate-200'}" data-st="${t.id}"><i class="fas ${t.icon} mr-1.5"></i>${t.label}</button>`).join('')}
+          </div>
+          <div id="setup-content-area" class="space-y-4"></div>
+        </div>`
+
+      $$('.setup-tab').forEach(btn => btn.addEventListener('click', () => {
+        state.setupTab = btn.dataset.st
+        renderSetupTracker()
+      }))
+      $('#setup-export-btn').addEventListener('click', () => window.open('/api/tracker/export/csv', '_blank'))
+
+      switch (state.setupTab) {
+        case 'reviewq': renderSetupReviewQueue(isVenture); break
+        case 'analytics': renderSetupAnalytics(); break
+        case 'decisions': renderSetupDecisions(isVenture); break
+        default: renderTrackerBoard(isVenture)
+      }
+    } catch (e) {
+      content.innerHTML = errorHtml('setup tracker', e)
+    }
+  }
+
+  // ── TRACKER BOARD — stages → sections → Excel grid ──────
+  function renderTrackerBoard(isVenture) {
+    const area = $('#setup-content-area')
+    const stages = setupCache.stages
+    if (state.setupStageId === 0 && stages.length > 0) state.setupStageId = stages[0].id
+    const stage = stages.find(s => s.id === state.setupStageId) || stages[0]
+
+    area.innerHTML = `
+      <!-- STAGE STEPPER -->
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-2" id="stage-stepper">
+        ${stages.map((st, i) => {
+          const active = st.id === stage.id
+          const stColors = { completed: 'border-emerald-500/50', in_progress: 'border-indigo-500/50', blocked: 'border-red-500/50', pending: 'border-slate-700/50' }
+          return `<button class="stage-step glass-card rounded-xl p-3 text-left border-t-2 ${stColors[st.status] || ''} ${active ? 'ring-1 ring-indigo-500/50 bg-indigo-600/10' : ''} transition hover:border-indigo-500/40" data-stage="${st.id}">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Stage ${i + 1}</span>
+              <span class="text-xs font-bold ${st.stats.avg_progress >= 70 ? 'text-emerald-400' : st.stats.avg_progress >= 30 ? 'text-indigo-400' : 'text-slate-500'}">${st.stats.avg_progress}%</span>
+            </div>
+            <div class="font-semibold text-sm mt-0.5">${st.name}</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">${st.stats.done_items}/${st.stats.total_items} items done · ${fmtINR(st.stats.est_cost)}</div>
+            <div class="mt-2 bg-slate-800/50 rounded-full h-1 overflow-hidden">
+              <div class="h-full bg-gradient-to-r from-indigo-500 to-cyan-400 rounded-full" style="width:${st.stats.avg_progress}%"></div>
+            </div>
+          </button>`
+        }).join('')}
+      </div>
+
+      <!-- STAGE OBJECTIVE BANNER -->
+      <div class="glass-card rounded-2xl p-5 flex flex-col sm:flex-row sm:items-start gap-4 border-l-2 border-indigo-500/50">
+        <div class="flex-1">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h3 class="font-bold">${stage.name}</h3>
+            <span class="text-xs px-2 py-0.5 rounded-full border ${SETUP_STATUS_COLORS[stage.status] || ''}">${stage.status.replace(/_/g, ' ')}</span>
+          </div>
+          <p class="text-sm text-slate-400 mt-1">${stage.description || ''}</p>
+          <p class="text-xs text-cyan-400/80 mt-2 flex items-start gap-1.5"><i class="fas fa-bullseye mt-0.5"></i> <span><strong>Objective:</strong> ${stage.objective || '—'}</span></p>
+        </div>
+        ${!isVenture ? `<button id="add-section-btn" class="shrink-0 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition btn-glow"><i class="fas fa-plus mr-1"></i> Add Section Header</button>` : ''}
+      </div>
+
+      <!-- SECTIONS -->
+      <div class="space-y-6" id="sections-area">
+        ${stage.sections.length === 0 ? `<div class="glass-card rounded-2xl p-10 text-center"><p class="text-slate-500">No section headers yet in this stage.</p>${!isVenture ? '<p class="text-xs text-slate-600 mt-1">Click "Add Section Header" to create your first section (e.g., Procurement Planning).</p>' : ''}</div>` : ''}
+        ${stage.sections.map(sec => sectionCardHtml(sec, isVenture)).join('')}
+      </div>`
+
+    $$('.stage-step').forEach(btn => btn.addEventListener('click', () => {
+      state.setupStageId = parseInt(btn.dataset.stage)
+      renderTrackerBoard(isVenture)
+    }))
+    const addSecBtn = $('#add-section-btn')
+    if (addSecBtn) addSecBtn.addEventListener('click', () => openSectionForm(stage.id))
+
+    wireSectionCards(isVenture)
+    gsap.from('#stage-stepper > button', { y: 20, opacity: 0, duration: 0.4, stagger: 0.06 })
+    gsap.from('#sections-area > div', { y: 30, opacity: 0, duration: 0.5, stagger: 0.1 })
+  }
+
+  function sectionCardHtml(sec, isVenture) {
+    const s = sec.stats
+    return `
+    <div class="glass-card rounded-2xl overflow-hidden" id="section-${sec.id}">
+      <!-- SECTION HEADER -->
+      <div class="p-5 border-b border-slate-800/50 flex flex-col lg:flex-row lg:items-center gap-3">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h3 class="font-bold">${sec.title}</h3>
+            <span class="text-xs px-2 py-0.5 rounded-full border ${SETUP_STATUS_COLORS[sec.status] || ''}">${sec.status.replace(/_/g, ' ')}</span>
+            <!-- BEST-PRACTICE TOOLTIP -->
+            ${sec.guideline_summary ? `
+            <span class="relative group cursor-help">
+              <i class="fas fa-lightbulb text-amber-400/80 hover:text-amber-300 transition"></i>
+              <span class="absolute left-1/2 -translate-x-1/2 top-6 z-30 hidden group-hover:block w-72 bg-slate-900 border border-amber-500/30 rounded-xl p-3 text-xs text-amber-200/90 shadow-2xl normal-case font-normal">
+                <span class="block text-[10px] uppercase tracking-wider text-amber-400 font-bold mb-1"><i class="fas fa-star mr-1"></i>Best Practice</span>
+                ${sec.guideline_summary}
+              </span>
+            </span>` : ''}
+          </div>
+          <p class="text-xs text-slate-500 mt-1">${sec.description || ''}</p>
+        </div>
+        <div class="flex items-center gap-3 shrink-0 flex-wrap">
+          <div class="text-xs text-slate-500 text-right">
+            <div>${s.done}/${s.total} done · ${s.avg_progress}%</div>
+            <div class="text-slate-600">${fmtINR(s.est_cost)} est.</div>
+          </div>
+          <div class="w-20 bg-slate-800/50 rounded-full h-1.5 overflow-hidden">
+            <div class="h-full bg-gradient-to-r from-indigo-500 to-cyan-400 rounded-full" style="width:${s.avg_progress}%"></div>
+          </div>
+          ${!isVenture ? `
+            <button class="add-row-btn bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 border border-indigo-600/30 text-xs px-3 py-2 rounded-lg transition font-medium" data-section="${sec.id}"><i class="fas fa-plus mr-1"></i> Add Row</button>
+            <button class="tips-btn bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 text-xs px-3 py-2 rounded-lg transition" data-section="${sec.id}" title="Best-practice guidance"><i class="fas fa-lightbulb mr-1"></i> Tips (${sec.guidelines.length})</button>
+            ${sec.status !== 'submitted' && sec.status !== 'approved' && s.total > 0 ? `<button class="submit-section-btn bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs px-3 py-2 rounded-lg transition font-medium" data-section="${sec.id}"><i class="fas fa-paper-plane mr-1"></i> Submit for Review</button>` : ''}
+          ` : `
+            <button class="tips-btn bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 text-xs px-3 py-2 rounded-lg transition" data-section="${sec.id}" title="Best-practice guidance"><i class="fas fa-lightbulb mr-1"></i> Tips (${sec.guidelines.length})</button>
+            <button class="decide-btn bg-amber-600/20 hover:bg-amber-600/40 text-amber-400 border border-amber-600/30 text-xs px-3 py-2 rounded-lg transition font-medium" data-section="${sec.id}"><i class="fas fa-gavel mr-1"></i> Log Decision</button>
+          `}
+        </div>
+      </div>
+      ${sec.reviewer_notes_banner || ''}
+      <!-- EXCEL-LIKE GRID -->
+      <div class="overflow-x-auto">
+        ${sec.line_items.length === 0 ? `<p class="text-xs text-slate-600 italic p-4">No line items yet. ${!isVenture ? 'Click "Add Row" to start building this section like a spreadsheet.' : ''}</p>` : `
+        <table class="w-full text-xs">
+          <thead>
+            <tr class="text-slate-500 text-left border-b border-slate-800/50 bg-slate-900/40">
+              <th class="p-2.5 min-w-[160px]">Line Item</th>
+              <th class="p-2.5">Stakeholder</th>
+              <th class="p-2.5 min-w-[140px]">Qty / Spec</th>
+              <th class="p-2.5">Vendor</th>
+              <th class="p-2.5">Priority</th>
+              <th class="p-2.5 text-right">Est. ₹</th>
+              <th class="p-2.5 min-w-[110px]">Progress</th>
+              <th class="p-2.5">Status</th>
+              <th class="p-2.5 min-w-[160px]">Action Item</th>
+              <th class="p-2.5">Due</th>
+              <th class="p-2.5">Review</th>
+              <th class="p-2.5 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${sec.line_items.map(it => lineItemRowHtml(it, isVenture)).join('')}
+          </tbody>
+        </table>`}
+      </div>
+    </div>`
+  }
+
+  function lineItemRowHtml(it, isVenture) {
+    const reviewBadge = {
+      draft: '<span class="text-[10px] px-1.5 py-0.5 rounded border bg-slate-700/50 text-slate-500 border-slate-700/30">draft</span>',
+      submitted: '<span class="text-[10px] px-1.5 py-0.5 rounded border bg-amber-500/20 text-amber-400 border-amber-500/20">submitted</span>',
+      approved: '<span class="text-[10px] px-1.5 py-0.5 rounded border bg-emerald-500/20 text-emerald-400 border-emerald-500/20">approved</span>',
+      changes_requested: '<span class="text-[10px] px-1.5 py-0.5 rounded border bg-orange-500/20 text-orange-400 border-orange-500/20">changes req.</span>'
+    }[it.review_status] || ''
+    return `
+      <tr class="border-t border-slate-800/30 hover:bg-slate-800/20 transition align-top" id="li-row-${it.id}">
+        <td class="p-2.5">
+          <div class="font-medium text-slate-200">${it.item_name}</div>
+          ${it.description ? `<div class="text-[10px] text-slate-500 mt-0.5">${it.description}</div>` : ''}
+          ${it.notes ? `<div class="text-[10px] text-slate-500 italic mt-0.5"><i class="fas fa-sticky-note mr-1 text-slate-600"></i>${it.notes}</div>` : ''}
+        </td>
+        <td class="p-2.5 text-slate-400">${it.stakeholder || '—'}</td>
+        <td class="p-2.5 text-slate-400">${it.quantity_notes || '—'}</td>
+        <td class="p-2.5 text-slate-400">${it.vendor || '—'}</td>
+        <td class="p-2.5"><span class="px-1.5 py-0.5 rounded border text-[10px] ${SETUP_PRIORITY_COLORS[it.priority] || ''}">${it.priority}</span></td>
+        <td class="p-2.5 text-right text-slate-300 whitespace-nowrap">${fmtINR(it.estimated_cost)}${it.actual_cost ? `<div class="text-[10px] text-cyan-400">act: ${fmtINR(it.actual_cost)}</div>` : ''}</td>
+        <td class="p-2.5">
+          ${!isVenture ? `
+          <div class="flex items-center gap-1.5">
+            <input type="number" min="0" max="100" value="${it.progress_pct || 0}" data-item="${it.id}"
+              class="li-progress w-14 bg-slate-800/80 border border-slate-700 rounded px-1.5 py-1 text-[11px] text-slate-200 text-center focus:border-indigo-500 outline-none">
+            <span class="text-slate-600">%</span>
+          </div>` : `
+          <div class="flex items-center gap-1.5">
+            <div class="w-14 bg-slate-800 rounded-full h-1.5 overflow-hidden"><div class="h-full bg-indigo-500 rounded-full" style="width:${it.progress_pct || 0}%"></div></div>
+            <span class="text-slate-400">${it.progress_pct || 0}%</span>
+          </div>`}
+        </td>
+        <td class="p-2.5">
+          ${!isVenture ? `
+          <select data-item="${it.id}" class="li-status bg-slate-800/80 border border-slate-700 rounded px-1.5 py-1 text-[11px] text-slate-300 focus:border-indigo-500 outline-none">
+            ${['not_started','in_progress','blocked','at_risk','done','deferred'].map(s => `<option value="${s}" ${it.status === s ? 'selected' : ''}>${s.replace(/_/g, ' ')}</option>`).join('')}
+          </select>` : `<span class="text-[10px] px-1.5 py-0.5 rounded border ${SETUP_STATUS_COLORS[it.status] || ''}">${it.status.replace(/_/g, ' ')}</span>`}
+        </td>
+        <td class="p-2.5">
+          <div class="text-slate-300">${it.action_item || '<span class="text-slate-600">—</span>'}</div>
+          ${it.reviewer_notes ? `<div class="text-[10px] text-orange-400/90 mt-1 flex items-start gap-1"><i class="fas fa-reply mt-0.5"></i><span><strong>Venture Leader:</strong> ${it.reviewer_notes}</span></div>` : ''}
+        </td>
+        <td class="p-2.5 text-slate-500 whitespace-nowrap">${it.due_date || '—'}</td>
+        <td class="p-2.5">${reviewBadge}</td>
+        <td class="p-2.5 text-right whitespace-nowrap">
+          ${!isVenture ? `
+            <button class="edit-item-btn text-indigo-400 hover:text-indigo-300 px-1.5 py-1 transition" data-item="${it.id}" title="Edit row"><i class="fas fa-pen"></i></button>
+            <button class="del-item-btn text-slate-600 hover:text-red-400 px-1.5 py-1 transition" data-item="${it.id}" title="Delete row"><i class="fas fa-trash"></i></button>
+          ` : (it.review_status === 'submitted' ? `
+            <button class="li-approve-btn text-emerald-400 hover:text-emerald-300 px-1.5 py-1 transition" data-item="${it.id}" title="Approve this line"><i class="fas fa-check"></i></button>
+            <button class="li-changes-btn text-orange-400 hover:text-orange-300 px-1.5 py-1 transition" data-item="${it.id}" title="Request changes / give guidance"><i class="fas fa-comment-dots"></i></button>
+          ` : '')}
+        </td>
+      </tr>`
+  }
+
+  function wireSectionCards(isVenture) {
+    // Inline progress updates (Excel-like)
+    $$('.li-progress').forEach(inp => {
+      inp.addEventListener('change', async () => {
+        const id = inp.dataset.item
+        const pct = Math.max(0, Math.min(100, parseInt(inp.value) || 0))
+        inp.value = pct
+        try {
+          const payload = { progress_pct: pct }
+          if (pct >= 100) payload.status = 'done'
+          await API.put(`/tracker/items/${id}`, payload)
+          toast('Progress updated.', 'success')
+        } catch { toast('Update failed.', 'error') }
+      })
+    })
+    // Inline status updates
+    $$('.li-status').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        const id = sel.dataset.item
+        try {
+          const payload = { status: sel.value }
+          if (sel.value === 'done') payload.progress_pct = 100
+          await API.put(`/tracker/items/${id}`, payload)
+          toast('Status updated.', 'success')
+          if (sel.value === 'done') renderSetupTracker()
+        } catch { toast('Update failed.', 'error') }
+      })
+    })
+    // Add row buttons
+    $$('.add-row-btn').forEach(btn => btn.addEventListener('click', () => openLineItemForm(parseInt(btn.dataset.section))))
+    // Edit row
+    $$('.edit-item-btn').forEach(btn => btn.addEventListener('click', () => openLineItemForm(null, setupCache.items[btn.dataset.item])))
+    // Delete row
+    $$('.del-item-btn').forEach(btn => btn.addEventListener('click', () => {
+      const it = setupCache.items[btn.dataset.item]
+      showModal(`
+        <div class="text-left space-y-4">
+          <h3 class="text-lg font-bold">Delete Line Item</h3>
+          <p class="text-sm text-slate-400">Remove "<strong class="text-slate-200">${it.item_name}</strong>" permanently?</p>
+          <div class="flex gap-2">
+            <button id="del-cancel" class="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-300 py-2.5 rounded-lg text-sm transition">Cancel</button>
+            <button id="del-confirm" class="flex-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-600/30 py-2.5 rounded-lg text-sm font-medium transition"><i class="fas fa-trash mr-1"></i> Delete</button>
+          </div>
+        </div>`)
+      $('#del-cancel').addEventListener('click', closeModal)
+      $('#del-confirm').addEventListener('click', async () => {
+        await API.delete(`/tracker/items/${it.id}`)
+        toast('Line item deleted.', 'info')
+        closeModal(); renderSetupTracker()
+      })
+    }))
+    // Tips modal
+    $$('.tips-btn').forEach(btn => btn.addEventListener('click', () => openGuidelinesModal(parseInt(btn.dataset.section), isVenture)))
+    // Submit section for review
+    $$('.submit-section-btn').forEach(btn => btn.addEventListener('click', () => {
+      const sec = setupCache.sections[btn.dataset.section]
+      showModal(`
+        <form id="submit-section-form" class="text-left space-y-4">
+          <h3 class="text-lg font-bold">Submit Section for Review</h3>
+          <p class="text-sm text-slate-400">All <strong class="text-slate-200">${sec.stats.total}</strong> line items under "<strong class="text-slate-200">${sec.title}</strong>" will be sent to the Venture Leader for review and approval.</p>
+          <div>
+            <label class="text-xs text-slate-400">Cover Note (optional)</label>
+            <textarea name="notes" rows="3" placeholder="Context for the reviewer — what's ready, where you need guidance..." class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea>
+          </div>
+          <button type="submit" class="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white py-2.5 rounded-lg font-medium transition"><i class="fas fa-paper-plane mr-1"></i> Submit for Venture Leader Review</button>
+        </form>`)
+      $('#submit-section-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const fd = new FormData(e.target)
+        try {
+          const { data } = await API.post('/tracker/submit', { section_id: sec.id, notes: fd.get('notes') })
+          toast(`Section submitted — ${data.item_count} line items sent for review.`, 'success')
+          closeModal(); renderSetupTracker()
+        } catch (err) { toast(err.response?.data?.error || 'Submission failed.', 'error') }
+      })
+    }))
+    // Venture: per-line approve / request changes
+    $$('.li-approve-btn').forEach(btn => btn.addEventListener('click', async () => {
+      try {
+        await API.put(`/tracker/items/${btn.dataset.item}/review`, { action: 'approve', reviewer_notes: 'Line approved.' })
+        toast('Line item approved.', 'success')
+        renderSetupTracker()
+      } catch { toast('Action failed.', 'error') }
+    }))
+    $$('.li-changes-btn').forEach(btn => btn.addEventListener('click', () => {
+      const it = setupCache.items[btn.dataset.item]
+      showModal(`
+        <form id="li-changes-form" class="text-left space-y-4">
+          <h3 class="text-lg font-bold">Request Changes / Guidance</h3>
+          <p class="text-sm text-slate-400">Give the CoE Director edit instructions for "<strong class="text-slate-200">${it.item_name}</strong>".</p>
+          <div>
+            <label class="text-xs text-slate-400">Guidance / Edit Instructions</label>
+            <textarea name="reviewer_notes" rows="3" required placeholder="e.g., Increase filament stock to cover 2 cohorts; get second vendor quote before approval..." class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea>
+          </div>
+          <button type="submit" class="w-full bg-orange-600/30 hover:bg-orange-600/50 text-orange-300 border border-orange-600/30 py-2.5 rounded-lg font-medium transition"><i class="fas fa-comment-dots mr-1"></i> Send Guidance</button>
+        </form>`)
+      $('#li-changes-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const fd = new FormData(e.target)
+        await API.put(`/tracker/items/${it.id}/review`, { action: 'request_changes', reviewer_notes: fd.get('reviewer_notes') })
+        toast('Guidance sent to the CoE Director.', 'success')
+        closeModal(); renderSetupTracker()
+      })
+    }))
+    // Venture: log decision
+    $$('.decide-btn').forEach(btn => btn.addEventListener('click', () => openDecisionForm(parseInt(btn.dataset.section), isVenture)))
+  }
+
+  // ── LINE ITEM FORM (add/edit row) ────────────────────────
+  function openLineItemForm(sectionId, editData = null) {
+    const d = editData || {}
+    const secId = editData ? editData.section_id : sectionId
+    showModal(`
+      <form id="li-form" class="space-y-3 text-left max-h-[70vh] overflow-y-auto pr-1">
+        <h3 class="text-lg font-bold">${editData ? 'Edit' : 'New'} Line Item</h3>
+        <div><label class="text-xs text-slate-400">Line Item <span class="text-red-400">*</span></label>
+          <input name="item_name" required value="${d.item_name || ''}" placeholder="e.g., FDM 3D Printer Fleet" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></div>
+        <div><label class="text-xs text-slate-400">Description</label>
+          <input name="description" value="${d.description || ''}" placeholder="What this is for" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="text-xs text-slate-400">Stakeholder</label>
+            <input name="stakeholder" value="${d.stakeholder || ''}" placeholder="Owner / responsible" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></div>
+          <div><label class="text-xs text-slate-400">Vendor</label>
+            <input name="vendor" value="${d.vendor || ''}" placeholder="Vendor (or quote status)" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></div>
+        </div>
+        <div><label class="text-xs text-slate-400">Quantity / Spec Notes</label>
+          <input name="quantity_notes" value="${d.quantity_notes || ''}" placeholder="e.g., 4 units · ≥300mm³ bed · dual extrusion" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></div>
+        <div class="grid grid-cols-3 gap-3">
+          <div><label class="text-xs text-slate-400">Priority</label>
+            <select name="priority" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">${['low','medium','high','critical'].map(p => `<option value="${p}" ${d.priority === p ? 'selected' : ''}>${p}</option>`).join('')}</select></div>
+          <div><label class="text-xs text-slate-400">Est. Cost (₹)</label>
+            <input name="estimated_cost" type="number" step="any" value="${d.estimated_cost || 0}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+          <div><label class="text-xs text-slate-400">Actual Cost (₹)</label>
+            <input name="actual_cost" type="number" step="any" value="${d.actual_cost || 0}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          <div><label class="text-xs text-slate-400">Progress %</label>
+            <input name="progress_pct" type="number" min="0" max="100" value="${d.progress_pct || 0}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+          <div><label class="text-xs text-slate-400">Status</label>
+            <select name="status" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">${['not_started','in_progress','blocked','at_risk','done','deferred'].map(s => `<option value="${s}" ${d.status === s ? 'selected' : ''}>${s.replace(/_/g, ' ')}</option>`).join('')}</select></div>
+          <div><label class="text-xs text-slate-400">Due Date</label>
+            <input name="due_date" type="date" value="${d.due_date || ''}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+        </div>
+        <div><label class="text-xs text-slate-400">Action Item (next step)</label>
+          <input name="action_item" value="${d.action_item || ''}" placeholder="e.g., Collect 2nd quotation and compare service terms" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></div>
+        <div><label class="text-xs text-slate-400">Notes</label>
+          <textarea name="notes" rows="2" placeholder="Free-form notes about this line item..." class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500">${d.notes || ''}</textarea></div>
+        <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow"><i class="fas fa-save mr-1"></i> ${editData ? 'Save Changes' : 'Add Line Item'}</button>
+      </form>`)
+
+    $('#li-form').addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const fd = new FormData(e.target)
+      const payload = Object.fromEntries(fd.entries())
+      payload.estimated_cost = parseFloat(payload.estimated_cost) || 0
+      payload.actual_cost = parseFloat(payload.actual_cost) || 0
+      payload.progress_pct = Math.max(0, Math.min(100, parseInt(payload.progress_pct) || 0))
+      try {
+        if (editData) {
+          await API.put(`/tracker/items/${editData.id}`, payload)
+          toast('Line item updated.', 'success')
+        } else {
+          payload.section_id = secId
+          await API.post('/tracker/items', payload)
+          toast('Line item added.', 'success')
+        }
+        closeModal(); renderSetupTracker()
+      } catch (err) { toast(err.response?.data?.error || 'Save failed.', 'error') }
+    })
+  }
+
+  // ── SECTION FORM (new section header) ────────────────────
+  function openSectionForm(stageId) {
+    showModal(`
+      <form id="section-form" class="space-y-3 text-left">
+        <h3 class="text-lg font-bold">New Section Header</h3>
+        <p class="text-xs text-slate-500">Sections group line items under a stage (e.g., "Procurement Planning" under Planning).</p>
+        <div><label class="text-xs text-slate-400">Section Title <span class="text-red-400">*</span></label>
+          <input name="title" required placeholder="e.g., Layout Design & Zoning" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></div>
+        <div><label class="text-xs text-slate-400">Description</label>
+          <textarea name="description" rows="2" placeholder="What this section covers..." class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
+        <div><label class="text-xs text-slate-400">Best-Practice Summary (tooltip)</label>
+          <textarea name="guideline_summary" rows="2" placeholder="One-line best-practice guidance shown as a tooltip on this section header..." class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
+        <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow"><i class="fas fa-plus mr-1"></i> Create Section</button>
+      </form>`)
+    $('#section-form').addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const fd = new FormData(e.target)
+      try {
+        await API.post('/tracker/sections', { stage_id: stageId, ...Object.fromEntries(fd.entries()) })
+        toast('Section header created.', 'success')
+        closeModal(); renderSetupTracker()
+      } catch (err) { toast(err.response?.data?.error || 'Save failed.', 'error') }
+    })
+  }
+
+  // ── GUIDELINES MODAL (best-practice tips) ────────────────
+  function openGuidelinesModal(sectionId, isVenture) {
+    const sec = setupCache.sections[sectionId]
+    showModal(`
+      <div class="text-left space-y-4">
+        <div>
+          <h3 class="text-lg font-bold flex items-center gap-2"><i class="fas fa-lightbulb text-amber-400"></i> Best-Practice Guidance</h3>
+          <p class="text-xs text-slate-500 mt-0.5">${sec.title}</p>
+        </div>
+        ${sec.guideline_summary ? `<div class="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 text-sm text-amber-200/90">${sec.guideline_summary}</div>` : ''}
+        <div class="space-y-2 max-h-64 overflow-y-auto">
+          ${sec.guidelines.length === 0 ? '<p class="text-xs text-slate-600 italic">No tips yet.</p>' : sec.guidelines.map(g => `
+            <div class="flex items-start gap-2 bg-slate-800/60 rounded-xl px-3 py-2.5 text-xs text-slate-300 border border-slate-700/30">
+              <i class="fas fa-check-circle text-emerald-400/70 mt-0.5 shrink-0"></i>
+              <span class="flex-1">${g.tip}</span>
+              ${!isVenture ? `<button class="del-tip-btn text-slate-600 hover:text-red-400 shrink-0 transition" data-tip="${g.id}"><i class="fas fa-times"></i></button>` : ''}
+            </div>`).join('')}
+        </div>
+        ${!isVenture ? `
+        <form id="tip-form" class="flex gap-2">
+          <input name="tip" required placeholder="Add a best-practice tip..." class="flex-1 bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-500">
+          <button type="submit" class="bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 border border-indigo-600/30 px-4 py-2 rounded-lg text-sm font-medium transition shrink-0"><i class="fas fa-plus"></i></button>
+        </form>` : ''}
+      </div>`)
+    if (!isVenture) {
+      $('#tip-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const fd = new FormData(e.target)
+        await API.post('/tracker/guidelines', { section_id: sectionId, tip: fd.get('tip') })
+        toast('Tip added.', 'success')
+        closeModal(); renderSetupTracker()
+      })
+      $$('.del-tip-btn').forEach(btn => btn.addEventListener('click', async () => {
+        await API.delete(`/tracker/guidelines/${btn.dataset.tip}`)
+        closeModal(); renderSetupTracker()
+      }))
+    }
+  }
+
+  // ── REVIEW QUEUE (Venture Leader) ────────────────────────
+  function renderSetupReviewQueue(isVenture) {
+    const area = $('#setup-content-area')
+    const subs = setupCache.submissions
+    const pending = subs.filter(s => s.status === 'pending_review')
+    const past = subs.filter(s => s.status !== 'pending_review')
+
+    area.innerHTML = `
+      <div class="glass-card rounded-2xl p-5 border-l-2 border-amber-500/50">
+        <h3 class="font-bold mb-1"><i class="fas fa-inbox text-amber-400 mr-2"></i>Pending Submissions (${pending.length})</h3>
+        <p class="text-xs text-slate-500">Sections submitted by the CoE Director — approve to accept, or request changes with edit instructions.</p>
+      </div>
+      ${pending.length === 0 ? `<div class="glass-card rounded-2xl p-10 text-center"><i class="fas fa-check-circle text-4xl text-emerald-400/40 mb-3"></i><p class="text-slate-400">No pending setup submissions.</p></div>` : ''}
+      ${pending.map(sub => {
+        const sec = setupCache.sections[sub.section_id]
+        return `
+        <div class="glass-card rounded-2xl p-5 space-y-3">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="font-semibold">${sub.section_title}</span>
+                <span class="text-xs px-2 py-0.5 rounded-full bg-slate-700/50 text-slate-400">${sub.stage_name}</span>
+                <span class="text-xs px-2 py-0.5 rounded-full border ${SETUP_STATUS_COLORS.pending_review}">${sub.status.replace(/_/g, ' ')}</span>
+              </div>
+              <p class="text-xs text-slate-500 mt-1">${sub.line_item_ids.length} line items · submitted ${sub.created_at || ''}</p>
+              ${sub.notes ? `<p class="text-xs text-slate-400 italic mt-1"><i class="fas fa-quote-left mr-1 text-slate-600"></i>${sub.notes}</p>` : ''}
+            </div>
+            <div class="flex gap-2 shrink-0">
+              <button class="open-section-btn bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 text-xs px-3 py-2 rounded-lg transition" data-section="${sub.section_id}"><i class="fas fa-eye mr-1"></i> View Items</button>
+              <button class="sub-approve-btn bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-400 border border-emerald-600/30 text-xs px-3 py-2 rounded-lg transition font-medium" data-sub="${sub.id}"><i class="fas fa-check mr-1"></i> Approve All</button>
+              <button class="sub-changes-btn bg-orange-600/20 hover:bg-orange-600/40 text-orange-400 border border-orange-600/30 text-xs px-3 py-2 rounded-lg transition font-medium" data-sub="${sub.id}"><i class="fas fa-comment-dots mr-1"></i> Request Changes</button>
+            </div>
+          </div>
+          ${sec ? `<div class="bg-slate-900/40 rounded-xl overflow-hidden border border-slate-800/50">
+            <table class="w-full text-xs">
+              <thead><tr class="text-slate-500 text-left border-b border-slate-800/50"><th class="p-2">Line Item</th><th class="p-2">Priority</th><th class="p-2 text-right">Est. ₹</th><th class="p-2">Progress</th><th class="p-2">Action Item</th></tr></thead>
+              <tbody>${sec.line_items.map(it => `<tr class="border-t border-slate-800/30"><td class="p-2 text-slate-300">${it.item_name}</td><td class="p-2"><span class="px-1.5 py-0.5 rounded border text-[10px] ${SETUP_PRIORITY_COLORS[it.priority] || ''}">${it.priority}</span></td><td class="p-2 text-right text-slate-400">${fmtINR(it.estimated_cost)}</td><td class="p-2 text-slate-400">${it.progress_pct}%</td><td class="p-2 text-slate-500">${it.action_item || '—'}</td></tr>`).join('')}</tbody>
+            </table>
+          </div>` : ''}
+        </div>`
+      }).join('')}
+      ${past.length > 0 ? `
+      <div class="glass-card rounded-2xl p-5">
+        <h3 class="font-semibold mb-3 text-sm text-slate-400">Review History</h3>
+        <div class="space-y-2">${past.slice(0, 10).map(sub => `
+          <div class="flex items-center justify-between text-xs bg-slate-800/40 rounded-xl px-3 py-2.5 border border-slate-800/40">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-slate-300 font-medium">${sub.section_title}</span>
+              <span class="px-2 py-0.5 rounded-full border ${SETUP_STATUS_COLORS[sub.status] || ''}">${sub.status.replace(/_/g, ' ')}</span>
+            </div>
+            <span class="text-slate-600">${sub.reviewed_at || sub.created_at || ''}</span>
+          </div>
+          ${sub.reviewer_notes ? `<p class="text-[10px] text-slate-500 pl-3 -mt-1"><i class="fas fa-reply mr-1"></i>${sub.reviewer_notes}</p>` : ''}`).join('')}
+        </div>
+      </div>` : ''}`
+
+    $$('.open-section-btn').forEach(btn => btn.addEventListener('click', () => {
+      const sec = setupCache.sections[btn.dataset.section]
+      if (sec) { state.setupStageId = sec.stage_id; state.setupTab = 'tracker'; renderSetupTracker() }
+    }))
+    $$('.sub-approve-btn').forEach(btn => btn.addEventListener('click', () => {
+      const sub = setupCache.submissions.find(s => s.id == btn.dataset.sub)
+      showModal(`
+        <form id="sub-approve-form" class="text-left space-y-4">
+          <h3 class="text-lg font-bold">Approve Section Submission</h3>
+          <p class="text-sm text-slate-400">All ${sub.line_item_ids.length} line items in "<strong class="text-slate-200">${sub.section_title}</strong>" will be marked approved.</p>
+          <div><label class="text-xs text-slate-400">Approval Note (optional)</label>
+            <textarea name="reviewer_notes" rows="2" placeholder="e.g., Approved — proceed to vendor PO stage..." class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
+          <button type="submit" class="w-full bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-600/30 py-2.5 rounded-lg font-medium transition"><i class="fas fa-check mr-1"></i> Approve Section</button>
+        </form>`)
+      $('#sub-approve-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const fd = new FormData(e.target)
+        await API.put(`/tracker/submissions/${sub.id}`, { action: 'approve', reviewer_notes: fd.get('reviewer_notes') })
+        toast('Section approved.', 'success')
+        closeModal(); renderSetupTracker()
+      })
+    }))
+    $$('.sub-changes-btn').forEach(btn => btn.addEventListener('click', () => {
+      const sub = setupCache.submissions.find(s => s.id == btn.dataset.sub)
+      showModal(`
+        <form id="sub-changes-form" class="text-left space-y-4">
+          <h3 class="text-lg font-bold">Request Changes</h3>
+          <p class="text-sm text-slate-400">Send "<strong class="text-slate-200">${sub.section_title}</strong>" back to the CoE Director with edit instructions.</p>
+          <div><label class="text-xs text-slate-400">Edit Instructions / Guidance <span class="text-red-400">*</span></label>
+            <textarea name="reviewer_notes" rows="4" required placeholder="e.g., Reclassify the SLA printer to Bucket 2 (defer), increase filament quantities for 2 cohorts, add LiPo cabinet to the safety section, then resubmit..." class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
+          <button type="submit" class="w-full bg-orange-600/30 hover:bg-orange-600/50 text-orange-300 border border-orange-600/30 py-2.5 rounded-lg font-medium transition"><i class="fas fa-comment-dots mr-1"></i> Send Back with Instructions</button>
+        </form>`)
+      $('#sub-changes-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const fd = new FormData(e.target)
+        await API.put(`/tracker/submissions/${sub.id}`, { action: 'request_changes', reviewer_notes: fd.get('reviewer_notes') })
+        toast('Sent back with edit instructions.', 'info')
+        closeModal(); renderSetupTracker()
+      })
+    }))
+  }
+
+  // ── SETUP ANALYTICS (bird's-eye view) ────────────────────
+  function renderSetupAnalytics() {
+    const area = $('#setup-content-area')
+    const a = setupCache.analytics
+    const statusMap = {}
+    a.by_status.forEach(r => { statusMap[r.status] = r.count })
+    const reviewMap = {}
+    a.by_review.forEach(r => { reviewMap[r.review_status] = r.count })
+    const totalItems = Object.values(statusMap).reduce((x, y) => x + y, 0)
+    const doneItems = statusMap.done || 0
+    const riskItems = (statusMap.blocked || 0) + (statusMap.at_risk || 0)
+    const approvedItems = reviewMap.approved || 0
+    const totalEst = a.cost_by_stage.reduce((x, r) => x + (r.est || 0), 0)
+    const totalActual = a.cost_by_stage.reduce((x, r) => x + (r.actual || 0), 0)
+
+    area.innerHTML = `
+      <!-- KPI STRIP -->
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-3" id="analytics-strip">
+        ${[
+          { label: 'Total Line Items', value: totalItems, icon: 'fa-list', color: 'text-indigo-400' },
+          { label: 'Completed', value: doneItems, icon: 'fa-check-circle', color: 'text-emerald-400' },
+          { label: 'Blocked / At Risk', value: riskItems, icon: 'fa-exclamation-triangle', color: 'text-red-400' },
+          { label: 'Leader-Approved', value: approvedItems, icon: 'fa-stamp', color: 'text-cyan-400' },
+          { label: 'Est. vs Actual', value: `${fmtINR(totalEst)}`, sub: `actual ${fmtINR(totalActual)}`, icon: 'fa-indian-rupee-sign', color: 'text-amber-400' }
+        ].map(k => `
+          <div class="glass-card rounded-2xl p-4">
+            <div class="flex items-center gap-2 text-xs text-slate-500"><i class="fas ${k.icon} ${k.color}"></i>${k.label}</div>
+            <div class="text-xl font-extrabold mt-1.5 ${k.color}">${k.value}</div>
+            ${k.sub ? `<div class="text-[10px] text-slate-500 mt-0.5">${k.sub}</div>` : ''}
+          </div>`).join('')}
+      </div>
+
+      <!-- CHARTS -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div class="glass-card rounded-2xl p-6">
+          <h3 class="font-semibold mb-4"><i class="fas fa-chart-bar text-indigo-400 mr-2"></i>Stage Progress — % of items done</h3>
+          <canvas id="setup-stage-chart" height="220"></canvas>
+        </div>
+        <div class="glass-card rounded-2xl p-6">
+          <h3 class="font-semibold mb-4"><i class="fas fa-chart-pie text-cyan-400 mr-2"></i>Line Item Status Distribution</h3>
+          <canvas id="setup-status-chart" height="220"></canvas>
+        </div>
+        <div class="glass-card rounded-2xl p-6">
+          <h3 class="font-semibold mb-4"><i class="fas fa-coins text-amber-400 mr-2"></i>Estimated Cost by Stage</h3>
+          <canvas id="setup-cost-chart" height="220"></canvas>
+        </div>
+        <div class="glass-card rounded-2xl p-6">
+          <h3 class="font-semibold mb-4"><i class="fas fa-clipboard-check text-emerald-400 mr-2"></i>Governance Pipeline</h3>
+          <div class="space-y-3">
+            ${['draft','submitted','approved','changes_requested'].map(r => {
+              const cnt = reviewMap[r] || 0
+              const pct = totalItems > 0 ? Math.round((cnt / totalItems) * 100) : 0
+              const labels = { draft: 'Draft (not yet submitted)', submitted: 'Submitted — awaiting review', approved: 'Approved by Venture Leader', changes_requested: 'Changes requested' }
+              const barColors = { draft: 'bg-slate-600', submitted: 'bg-amber-500', approved: 'bg-emerald-500', changes_requested: 'bg-orange-500' }
+              return `<div>
+                <div class="flex justify-between text-xs mb-1"><span class="text-slate-400">${labels[r]}</span><span class="text-slate-300 font-medium">${cnt} (${pct}%)</span></div>
+                <div class="bg-slate-800/50 rounded-full h-2 overflow-hidden"><div class="h-full ${barColors[r]} rounded-full transition-all duration-700" style="width:${pct}%"></div></div>
+              </div>`
+            }).join('')}
+          </div>
+        </div>
+      </div>
+
+      <!-- RISK ITEMS TABLE -->
+      <div class="glass-card rounded-2xl overflow-hidden">
+        <div class="p-5 border-b border-slate-800/50">
+          <h3 class="font-semibold"><i class="fas fa-exclamation-triangle text-red-400 mr-2"></i>Blocked & At-Risk Line Items (${a.risk_items.length})</h3>
+          <p class="text-xs text-slate-500 mt-0.5">Items needing immediate attention or a joint decision</p>
+        </div>
+        ${a.risk_items.length === 0 ? '<p class="text-xs text-slate-600 italic p-5">No blocked or at-risk items. Setup is flowing.</p>' : `
+        <div class="overflow-x-auto"><table class="w-full text-xs">
+          <thead><tr class="text-slate-500 text-left border-b border-slate-800/50 bg-slate-900/40"><th class="p-2.5">Line Item</th><th class="p-2.5">Section</th><th class="p-2.5">Stage</th><th class="p-2.5">Priority</th><th class="p-2.5">Status</th><th class="p-2.5">Action Item</th></tr></thead>
+          <tbody>${a.risk_items.map(it => `
+            <tr class="border-t border-slate-800/30 hover:bg-slate-800/20">
+              <td class="p-2.5 font-medium text-slate-200">${it.item_name}</td>
+              <td class="p-2.5 text-slate-400">${it.section_title}</td>
+              <td class="p-2.5 text-slate-500">${it.stage_name}</td>
+              <td class="p-2.5"><span class="px-1.5 py-0.5 rounded border text-[10px] ${SETUP_PRIORITY_COLORS[it.priority] || ''}">${it.priority}</span></td>
+              <td class="p-2.5"><span class="px-1.5 py-0.5 rounded border text-[10px] ${SETUP_STATUS_COLORS[it.status] || ''}">${it.status.replace(/_/g, ' ')}</span></td>
+              <td class="p-2.5 text-slate-400">${it.action_item || '—'}</td>
+            </tr>`).join('')}
+          </tbody></table></div>`}
+      </div>`
+
+    // Stage progress chart
+    const ctx1 = document.getElementById('setup-stage-chart')
+    if (ctx1) {
+      if (state.charts.setupStage) state.charts.setupStage.destroy()
+      state.charts.setupStage = new Chart(ctx1, {
+        type: 'bar',
+        data: {
+          labels: a.by_stage.map(s => s.name),
+          datasets: [{
+            label: '% items done',
+            data: a.by_stage.map(s => s.total > 0 ? Math.round((s.done / s.total) * 100) : 0),
+            backgroundColor: ['#818cf8', '#60a5fa', '#f59e0b', '#06b6d4', '#34d399'],
+            borderRadius: 6
+          }]
+        },
+        options: { responsive: true, scales: { y: { max: 100, grid: { color: '#1e293b' }, ticks: { color: '#94a3b8' } }, x: { grid: { display: false }, ticks: { color: '#94a3b8' } } }, plugins: { legend: { display: false } } }
+      })
+    }
+    // Status doughnut
+    const ctx2 = document.getElementById('setup-status-chart')
+    if (ctx2) {
+      if (state.charts.setupStatus) state.charts.setupStatus.destroy()
+      const order = ['done', 'in_progress', 'blocked', 'at_risk', 'not_started', 'deferred']
+      state.charts.setupStatus = new Chart(ctx2, {
+        type: 'doughnut',
+        data: {
+          labels: order.map(s => s.replace(/_/g, ' ')),
+          datasets: [{ data: order.map(s => statusMap[s] || 0), backgroundColor: ['#34d399', '#818cf8', '#f87171', '#fbbf24', '#475569', '#64748b'], borderColor: '#1e293b', borderWidth: 2 }]
+        },
+        options: { responsive: true, plugins: { legend: { labels: { color: '#94a3b8', padding: 12, font: { size: 11 } } } } }
+      })
+    }
+    // Cost by stage
+    const ctx3 = document.getElementById('setup-cost-chart')
+    if (ctx3) {
+      if (state.charts.setupCost) state.charts.setupCost.destroy()
+      state.charts.setupCost = new Chart(ctx3, {
+        type: 'bar',
+        data: {
+          labels: a.cost_by_stage.map(s => s.stage),
+          datasets: [
+            { label: 'Estimated ₹', data: a.cost_by_stage.map(s => s.est || 0), backgroundColor: '#818cf8', borderRadius: 4 },
+            { label: 'Actual ₹', data: a.cost_by_stage.map(s => s.actual || 0), backgroundColor: '#06b6d4', borderRadius: 4 }
+          ]
+        },
+        options: { responsive: true, scales: { x: { grid: { display: false }, ticks: { color: '#94a3b8' } }, y: { grid: { color: '#1e293b' }, ticks: { color: '#94a3b8' } } }, plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } } }
+      })
+    }
+    gsap.from('#analytics-strip > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.06 })
+  }
+
+  // ── DECISION LOG ─────────────────────────────────────────
+  function renderSetupDecisions(isVenture) {
+    const area = $('#setup-content-area')
+    const decisions = setupCache.decisions || []
+    const whoColors = { venture_leader: 'bg-amber-500/20 text-amber-400 border-amber-500/20', coe_leader: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/20', joint: 'bg-purple-500/20 text-purple-400 border-purple-500/20' }
+    const whoLabels = { venture_leader: 'Venture Leader', coe_leader: 'CoE Director', joint: 'Joint Decision' }
+
+    area.innerHTML = `
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div class="glass-card rounded-2xl p-5 flex-1 border-l-2 border-purple-500/50">
+          <h3 class="font-bold mb-1"><i class="fas fa-gavel text-purple-400 mr-2"></i>Decision & Action Log</h3>
+          <p class="text-xs text-slate-500">Joint decisions and next-step guidance — every decision links back to the section or line item it affects, so action items stay clear.</p>
+        </div>
+        <button id="add-decision-btn" class="shrink-0 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition btn-glow"><i class="fas fa-plus mr-1"></i> Log Decision</button>
+      </div>
+      <div class="space-y-3" id="decision-list">
+        ${decisions.length === 0 ? `<div class="glass-card rounded-2xl p-10 text-center"><i class="fas fa-gavel text-4xl text-slate-700 mb-3"></i><p class="text-slate-400">No decisions logged yet.</p></div>` : decisions.map(d => `
+          <div class="glass-card rounded-2xl p-5 space-y-2 border-l-2 ${d.decided_by === 'venture_leader' ? 'border-amber-500/50' : d.decided_by === 'joint' ? 'border-purple-500/50' : 'border-indigo-500/50'}">
+            <div class="flex items-center justify-between gap-2 flex-wrap">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-xs px-2 py-0.5 rounded-full border ${whoColors[d.decided_by] || ''}">${whoLabels[d.decided_by] || d.decided_by}</span>
+                ${d.section_title ? `<span class="text-xs px-2 py-0.5 rounded-full bg-slate-700/50 text-slate-400"><i class="fas fa-folder mr-1"></i>${d.section_title}</span>` : ''}
+                ${d.item_name ? `<span class="text-xs px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300"><i class="fas fa-tag mr-1"></i>${d.item_name}</span>` : '<span class="text-[10px] text-slate-600">General</span>'}
+              </div>
+              <span class="text-xs text-slate-600">${d.decision_date || d.created_at || ''}</span>
+            </div>
+            <p class="text-sm text-slate-200">${d.decision}</p>
+            ${d.next_steps ? `<div class="bg-cyan-500/10 border border-cyan-500/20 rounded-xl p-3 text-xs text-cyan-200/90 flex items-start gap-2"><i class="fas fa-arrow-right mt-0.5 shrink-0"></i><span><strong>Next steps:</strong> ${d.next_steps}</span></div>` : ''}
+          </div>`).join('')}
+      </div>`
+
+    $('#add-decision-btn').addEventListener('click', () => openDecisionForm(null, isVenture))
+    gsap.from('#decision-list > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.06 })
+  }
+
+  function openDecisionForm(sectionId, isVenture) {
+    const sections = Object.values(setupCache.sections)
+    showModal(`
+      <form id="decision-form" class="space-y-3 text-left">
+        <h3 class="text-lg font-bold">Log a Decision</h3>
+        <p class="text-xs text-slate-500">Record a decision and the conditional next steps / edit instructions that follow from it.</p>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="text-xs text-slate-400">Decided By</label>
+            <select name="decided_by" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">
+              <option value="venture_leader" ${isVenture ? 'selected' : ''}>Venture Leader</option>
+              <option value="coe_leader" ${!isVenture ? 'selected' : ''}>CoE Director</option>
+              <option value="joint">Joint</option>
+            </select></div>
+          <div><label class="text-xs text-slate-400">Date</label>
+            <input name="decision_date" type="date" value="${dayjs().format('YYYY-MM-DD')}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+        </div>
+        <div><label class="text-xs text-slate-400">Related Section (optional)</label>
+          <select name="section_id" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">
+            <option value="">— General / none —</option>
+            ${sections.map(s => `<option value="${s.id}" ${sectionId === s.id ? 'selected' : ''}>${s.title}</option>`).join('')}
+          </select></div>
+        <div><label class="text-xs text-slate-400">Decision <span class="text-red-400">*</span></label>
+          <textarea name="decision" rows="3" required placeholder="e.g., FDM printer fleet approved at 4 units; SLA printer deferred to Bucket 2..." class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
+        <div><label class="text-xs text-slate-400">Next Steps / Edit Instructions</label>
+          <textarea name="next_steps" rows="3" placeholder="e.g., CoE Director to attach 2nd quotation, then resubmit Procurement Planning section..." class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
+        <button type="submit" class="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white py-2.5 rounded-lg font-medium transition btn-glow"><i class="fas fa-gavel mr-1"></i> Log Decision</button>
+      </form>`)
+    $('#decision-form').addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const fd = new FormData(e.target)
+      const payload = Object.fromEntries(fd.entries())
+      payload.section_id = payload.section_id ? parseInt(payload.section_id) : null
+      try {
+        await API.post('/tracker/decisions', payload)
+        toast('Decision logged.', 'success')
+        closeModal(); renderSetupTracker()
+      } catch (err) { toast(err.response?.data?.error || 'Save failed.', 'error') }
+    })
   }
 
   // ── SHARED REPORT VIEW ───────────────────────────────────
