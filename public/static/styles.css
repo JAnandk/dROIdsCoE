@@ -1,0 +1,53 @@
+/* SRM dROIds CoE Mission Tracker — Styles */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+* { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #0f172a; }
+::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+/* Status badges */
+.status-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 500; text-transform: capitalize; }
+.status-completed { background: rgba(52,211,153,0.15); color: #34d399; }
+.status-in_progress, .status-active { background: rgba(99,102,241,0.15); color: #818cf8; }
+.status-on_track { background: rgba(96,165,250,0.15); color: #60a5fa; }
+.status-at_risk { background: rgba(248,113,113,0.15); color: #f87171; }
+.status-planned, .status-pending, .status-draft { background: rgba(148,163,184,0.1); color: #94a3b8; }
+.status-submitted { background: rgba(251,191,36,0.15); color: #fbbf24; }
+.status-blocked, .status-paused { background: rgba(239,68,68,0.15); color: #ef4444; }
+.status-ordered { background: rgba(59,130,246,0.15); color: #3b82f6; }
+.status-delivered { background: rgba(16,185,129,0.15); color: #10b981; }
+.status-identified { background: rgba(148,163,184,0.1); color: #94a3b8; }
+.status-engaged { background: rgba(99,102,241,0.15); color: #818cf8; }
+.status-deferred, .status-paused, .status-dropped { background: rgba(107,114,128,0.15); color: #6b7280; }
+
+/* Animate spin */
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.animate-spin { animation: spin 1s linear infinite; }
+
+/* Glass effect */
+.glass { background: rgba(15,23,42,0.8); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+
+/* Progress bar shimmer */
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+.progress-shimmer { background: linear-gradient(90deg, #6366f1 25%, #818cf8 37%, #6366f1 63%); background-size: 200% 100%; animation: shimmer 2s ease infinite; }
+
+/* Smooth transitions */
+* { transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease; }
+
+/* Canvas container */
+#three-container canvas { display: block; }
+
+/* Prose for LLM output */
+.prose-invert strong { color: #e2e8f0; }
+.prose-invert ul, .prose-invert ol { padding-left: 1.5em; }
+.prose-invert li { margin-bottom: 0.25em; }
+
+/* Timetable line */
+#roadmap-timeline .absolute { transition: all 0.3s; }
+#roadmap-timeline .border-emerald-500 + .border-emerald-500 .absolute { background: #34d399; }
+
+/* Selection styling */
+::selection { background: rgba(99,102,241,0.3); color: #e2e8f0; }

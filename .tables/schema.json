@@ -1,0 +1,272 @@
+{
+  "tables": [
+    {
+      "name": "access_codes",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "primary_key": true},
+        {"name": "role", "type": "TEXT", "not_null": true},
+        {"name": "passcode", "type": "TEXT", "not_null": true, "unique": true},
+        {"name": "label", "type": "TEXT", "not_null": true},
+        {"name": "is_active", "type": "INTEGER", "default": 1},
+        {"name": "created_at", "type": "DATETIME", "default": "CURRENT_TIMESTAMP"}
+      ]
+    },
+    {
+      "name": "kras",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "primary_key": true},
+        {"name": "title", "type": "TEXT", "not_null": true},
+        {"name": "description", "type": "TEXT"},
+        {"name": "weight", "type": "INTEGER", "default": 100},
+        {"name": "sort_order", "type": "INTEGER", "default": 0}
+      ]
+    },
+    {
+      "name": "kpis",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "primary_key": true},
+        {"name": "kra_id", "type": "INTEGER", "not_null": true, "references": "kras(id)"},
+        {"name": "title", "type": "TEXT", "not_null": true},
+        {"name": "description", "type": "TEXT"},
+        {"name": "metric_unit", "type": "TEXT"},
+        {"name": "target_value", "type": "REAL"},
+        {"name": "current_value", "type": "REAL", "default": 0},
+        {"name": "status", "type": "TEXT", "default": "pending"},
+        {"name": "sort_order", "type": "INTEGER", "default": 0},
+        {"name": "updated_at", "type": "DATETIME", "default": "CURRENT_TIMESTAMP"}
+      ]
+    },
+    {
+      "name": "cohorts",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "primary_key": true},
+        {"name": "name", "type": "TEXT", "not_null": true},
+        {"name": "stage", "type": "TEXT", "not_null": true},
+        {"name": "campus", "type": "TEXT", "not_null": true},
+        {"name": "student_count", "type": "INTEGER", "default": 0},
+        {"name": "start_date", "type": "TEXT"},
+        {"name": "end_date", "type": "TEXT"},
+        {"name": "status", "type": "TEXT", "default": "planned"},
+        {"name": "created_at", "type": "DATETIME", "default": "CURRENT_TIMESTAMP"}
+      ]
+    },
+    {
+      "name": "students",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "primary_key": true},
+        {"name": "cohort_id", "type": "INTEGER", "references": "cohorts(id)"},
+        {"name": "name", "type": "TEXT", "not_null": true},
+        {"name": "email", "type": "TEXT"},
+        {"name": "current_stage", "type": "TEXT", "default": "A"},
+        {"name": "progress_pct", "type": "INTEGER", "default": 0},
+        {"name": "certifications", "type": "TEXT", "default": "[]"},
+        {"name": "is_field_immersion", "type": "INTEGER", "default": 0},
+        {"name": "status", "type": "TEXT", "default": "active"},
+        {"name": "created_at", "type": "DATETIME", "default": "CURRENT_TIMESTAMP"}
+      ]
+    },
+    {
+      "name": "daily_updates",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "primary_key": true},
+        {"name": "report_date", "type": "TEXT", "not_null": true},
+        {"name": "cohort_attendance", "type": "TEXT"},
+        {"name": "facility_safety_issues", "type": "TEXT"},
+        {"name": "vendor_asset_blockers", "type": "TEXT"},
+        {"name": "prototype_test_status", "type": "TEXT"},
+        {"name": "decisions_needed", "type": "TEXT"},
+        {"name": "created_by", "type": "TEXT", "default": "coe_leader"},
+        {"name": "created_at", "type": "DATETIME", "default": "CURRENT_TIMESTAMP"}
+      ]
+    },
+    {
+      "name": "weekly_reports",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "primary_key": true},
+        {"name": "week_start", "type": "TEXT", "not_null": true},
+        {"name": "week_end", "type": "TEXT", "not_null": true},
+        {"name": "progress_vs_plan", "type": "TEXT"},
+        {"name": "utilization_dashboard", "type": "TEXT"},
+        {"name": "budget_burn", "type": "TEXT"},
+        {"name": "faculty_partner_engagement", "type": "TEXT"},
+        {"name": "content_outreach", "type": "TEXT"},
+        {"name": "risks_mitigations", "type": "TEXT"},
+        {"name": "asks", "type": "TEXT"},
+        {"name": "created_by", "type": "TEXT", "default": "coe_leader"},
+        {"name": "status", "type": "TEXT", "default": "draft"},
+        {"name": "created_at", "type": "DATETIME", "default": "CURRENT_TIMESTAMP"}
+      ]
+    },
+    {
+      "name": "monthly_reports",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "primary_key": true},
+        {"name": "report_month", "type": "TEXT", "not_null": true},
+        {"name": "kpi_scorecard", "type": "TEXT"},
+        {"name": "cohort_funnel_trend", "type": "TEXT"},
+        {"name": "rd_ip_service_pipeline", "type": "TEXT"},
+        {"name": "capex_opex_status", "type": "TEXT"},
+        {"name": "next_month_plan", "type": "TEXT"},
+        {"name": "strategic_decisions", "type": "TEXT"},
+        {"name": "budget_approvals", "type": "TEXT"},
+        {"name": "created_by", "type": "TEXT", "default": "coe_leader"},
+        {"name": "status", "type": "TEXT", "default": "draft"},
+        {"name": "created_at", "type": "DATETIME", "default": "CURRENT_TIMESTAMP"}
+      ]
+    },
+    {
+      "name": "facilities",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "primary_key": true},
+        {"name": "name", "type": "TEXT", "not_null": true},
+        {"name": "campus", "type": "TEXT", "not_null": true},
+        {"name": "zone_type", "type": "TEXT", "not_null": true},
+        {"name": "description", "type": "TEXT"},
+        {"name": "status", "type": "TEXT", "default": "planned"},
+        {"name": "equipment", "type": "TEXT", "default": "[]"},
+        {"name": "x_position", "type": "REAL", "default": 0},
+        {"name": "y_position", "type": "REAL", "default": 0},
+        {"name": "width", "type": "REAL", "default": 100},
+        {"name": "height", "type": "REAL", "default": 100},
+        {"name": "created_at", "type": "DATETIME", "default": "CURRENT_TIMESTAMP"}
+      ]
+    },
+    {
+      "name": "procurement_items",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "primary_key": true},
+        {"name": "category", "type": "TEXT", "not_null": true},
+        {"name": "item_name", "type": "TEXT", "not_null": true},
+        {"name": "campus_priority", "type": "TEXT", "default": "both"},
+        {"name": "quantity_notes", "type": "TEXT"},
+        {"name": "spend_bucket", "type": "INTEGER", "default": 1},
+        {"name": "status", "type": "TEXT", "default": "planned"},
+        {"name": "estimated_cost", "type": "REAL", "default": 0},
+        {"name": "actual_cost", "type": "REAL", "default": 0},
+        {"name": "vendor", "type": "TEXT"},
+        {"name": "notes", "type": "TEXT"},
+        {"name": "created_at", "type": "DATETIME", "default": "CURRENT_TIMESTAMP"}
+      ]
+    },
+    {
+      "name": "partners",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "primary_key": true},
+        {"name": "name", "type": "TEXT", "not_null": true},
+        {"name": "type", "type": "TEXT"},
+        {"name": "description", "type": "TEXT"},
+        {"name": "contact_info", "type": "TEXT"},
+        {"name": "status", "type": "TEXT", "default": "identified"},
+        {"name": "engagement_notes", "type": "TEXT"},
+        {"name": "created_at", "type": "DATETIME", "default": "CURRENT_TIMESTAMP"}
+      ]
+    },
+    {
+      "name": "reports",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "primary_key": true},
+        {"name": "title", "type": "TEXT", "not_null": true},
+        {"name": "report_type", "type": "TEXT", "not_null": true},
+        {"name": "content", "type": "TEXT"},
+        {"name": "generated_by", "type": "TEXT", "default": "coe_leader"},
+        {"name": "share_token", "type": "TEXT"},
+        {"name": "is_shared", "type": "INTEGER", "default": 0},
+        {"name": "created_at", "type": "DATETIME", "default": "CURRENT_TIMESTAMP"}
+      ]
+    },
+    {
+      "name": "roadmap_milestones",
+      "columns": [
+        {"name": "id", "type": "INTEGER", "primary_key": true},
+        {"name": "month_range", "type": "TEXT", "not_null": true},
+        {"name": "phase_title", "type": "TEXT", "not_null": true},
+        {"name": "description", "type": "TEXT"},
+        {"name": "tasks", "type": "TEXT", "default": "[]"},
+        {"name": "status", "type": "TEXT", "default": "pending"},
+        {"name": "sort_order", "type": "INTEGER", "default": 0}
+      ]
+    }
+  ],
+  "seed": {
+    "access_codes": [
+      {"role": "coe_leader", "passcode": "dROIds2026!", "label": "Default CoE Leader Passcode"},
+      {"role": "venture_owner", "passcode": "VentureSRM!26", "label": "Default Venture Owner Passcode"}
+    ],
+    "kras": [
+      {"id": 1, "title": "Facility Readiness", "description": "Benches, safety, store, simulator and flight operations uptime", "weight": 20, "sort_order": 1},
+      {"id": 2, "title": "Cohort Outcomes", "description": "Enrollment quality, attendance, completion, progression and certificate conversion", "weight": 20, "sort_order": 2},
+      {"id": 3, "title": "R&D Throughput", "description": "Prototypes, test cycles, faculty engagement, project documentation, IP capture", "weight": 20, "sort_order": 3},
+      {"id": 4, "title": "Compliance Discipline", "description": "Logs, asset control, safety incidents, vendor verification, field permissions", "weight": 15, "sort_order": 4},
+      {"id": 5, "title": "Brand & Outreach", "description": "Showcases, content cadence, partnership activation, campus pull", "weight": 15, "sort_order": 5},
+      {"id": 6, "title": "Commercial Readiness", "description": "Service pilots, external briefs, quote pipeline, funding opportunity tracking", "weight": 10, "sort_order": 6}
+    ],
+    "kpis": [
+      {"id": 1, "kra_id": 1, "title": "Bench Utilization Rate", "metric_unit": "%", "target_value": 80, "sort_order": 1},
+      {"id": 2, "kra_id": 1, "title": "Simulator Utilization Rate", "metric_unit": "%", "target_value": 75, "sort_order": 2},
+      {"id": 3, "kra_id": 1, "title": "Safety Equipment Audit Score", "metric_unit": "/100", "target_value": 95, "sort_order": 3},
+      {"id": 4, "kra_id": 1, "title": "Store Inventory Accuracy", "metric_unit": "%", "target_value": 98, "sort_order": 4},
+      {"id": 5, "kra_id": 2, "title": "Cohort Fill Rate", "metric_unit": "%", "target_value": 90, "sort_order": 1},
+      {"id": 6, "kra_id": 2, "title": "Attendance Rate", "metric_unit": "%", "target_value": 85, "sort_order": 2},
+      {"id": 7, "kra_id": 2, "title": "Foundation-to-Build Progression", "metric_unit": "%", "target_value": 70, "sort_order": 3},
+      {"id": 8, "kra_id": 2, "title": "Build-to-Field Progression Rate", "metric_unit": "%", "target_value": 50, "sort_order": 4},
+      {"id": 9, "kra_id": 3, "title": "Prototype Count", "metric_unit": "units", "target_value": 12, "sort_order": 1},
+      {"id": 10, "kra_id": 3, "title": "Successful Test Count", "metric_unit": "tests", "target_value": 30, "sort_order": 2},
+      {"id": 11, "kra_id": 3, "title": "Redesign Loop Closure Time", "metric_unit": "days", "target_value": 7, "sort_order": 3},
+      {"id": 12, "kra_id": 3, "title": "Faculty Mentor Participation", "metric_unit": "faculty", "target_value": 8, "sort_order": 4},
+      {"id": 13, "kra_id": 4, "title": "Safety Incidents (Lower=Better)", "metric_unit": "incidents", "target_value": 0, "sort_order": 1},
+      {"id": 14, "kra_id": 4, "title": "Asset Loss Rate", "metric_unit": "%", "target_value": 1, "sort_order": 2},
+      {"id": 15, "kra_id": 4, "title": "Vendor Verification Score", "metric_unit": "%", "target_value": 100, "sort_order": 3},
+      {"id": 16, "kra_id": 5, "title": "Social Content Consistency", "metric_unit": "posts/week", "target_value": 3, "sort_order": 1},
+      {"id": 17, "kra_id": 5, "title": "Demo Event Count", "metric_unit": "events", "target_value": 4, "sort_order": 2},
+      {"id": 18, "kra_id": 5, "title": "Partner Meetings Held", "metric_unit": "meetings", "target_value": 6, "sort_order": 3},
+      {"id": 19, "kra_id": 6, "title": "Applied-Project Leads", "metric_unit": "leads", "target_value": 4, "sort_order": 1},
+      {"id": 20, "kra_id": 6, "title": "Active Proposals", "metric_unit": "proposals", "target_value": 3, "sort_order": 2},
+      {"id": 21, "kra_id": 6, "title": "External Briefs Delivered", "metric_unit": "briefs", "target_value": 2, "sort_order": 3}
+    ],
+    "roadmap_milestones": [
+      {"id": 1, "month_range": "Month 0-1", "phase_title": "Mission Lock + Layout Finalization", "description": "Finalize governance, room allocation, layout drawings, vendor shortlist, cohort calendar and SRM dROIds brand narrative.", "tasks": "[\"Finalize governance structure\",\"Approve room allocation\",\"Complete layout drawings\",\"Shortlist vendors\",\"Publish cohort calendar\",\"Lock brand narrative\"]", "sort_order": 1},
+      {"id": 2, "month_range": "Month 1-2", "phase_title": "Core Procurement + Site Prep", "description": "Benches, safety, tools, store, simulation, basic fabrication, indoor test setup, field planning kit, secure data stack.", "tasks": "[\"Order workshop benches\",\"Install safety equipment\",\"Setup tool stations\",\"Configure simulation pods\",\"Build indoor test cage\",\"Deploy secure data stack\",\"Setup field planning kit\"]", "sort_order": 2},
+      {"id": 3, "month_range": "Month 2-3", "phase_title": "Soft Launch + Internal Showcase", "description": "Pilot cohort onboarding, faculty walkthroughs, internal demos, content launch, baseline utilization dashboard.", "tasks": "[\"Onboard pilot cohort\",\"Conduct faculty walkthroughs\",\"Run internal demos\",\"Launch content engine\",\"Activate utilization dashboard\"]", "sort_order": 3},
+      {"id": 4, "month_range": "Month 3-4", "phase_title": "Cohort Execution + Trichy Immersion", "description": "First structured foundation/build cohorts, first field immersion batch, first outdoor workflow reports.", "tasks": "[\"Launch Foundation cohort\",\"Start Build cohort\",\"Begin Trichy immersion program\",\"Execute outdoor workflow\",\"Generate field reports\"]", "sort_order": 4},
+      {"id": 5, "month_range": "Month 4-6", "phase_title": "R&D / Service Readiness", "description": "Faculty project alignment, applied challenge briefs, partner demos, RPTO strategy checkpoint, client-use-case scouting.", "tasks": "[\"Align faculty projects\",\"Draft applied challenge briefs\",\"Run partner demonstrations\",\"Complete RPTO strategy checkpoint\",\"Scout client use cases\"]", "sort_order": 5}
+    ],
+    "facilities": [
+      {"name": "Entry / Showcase Zone", "campus": "ramapuram", "zone_type": "showcase", "description": "Demo drones, awards, screens, current projects, QR lead capture", "x_position": 0, "y_position": 0, "width": 120, "height": 80},
+      {"name": "Learning Bay", "campus": "ramapuram", "zone_type": "learning", "description": "Briefings, whiteboards, cohort induction, regulations, digital modules", "x_position": 130, "y_position": 0, "width": 100, "height": 80},
+      {"name": "Workshop Benches", "campus": "ramapuram", "zone_type": "workshop", "description": "12-20 individual ESD-safe seats with tool discipline and shared components", "x_position": 0, "y_position": 90, "width": 230, "height": 100},
+      {"name": "Simulation + Test Zone", "campus": "ramapuram", "zone_type": "simulation", "description": "Simulator pods, indoor cage, calibration, debugging and logging", "x_position": 240, "y_position": 0, "width": 120, "height": 100},
+      {"name": "3D Printing Corner", "campus": "ramapuram", "zone_type": "fabrication", "description": "3D printers, material cabinet, post-process table", "x_position": 240, "y_position": 110, "width": 80, "height": 80},
+      {"name": "Store + Secure IP Core", "campus": "ramapuram", "zone_type": "storage", "description": "Parts room, battery safety, server/NAS, controlled documentation flow", "x_position": 320, "y_position": 0, "width": 80, "height": 190},
+      {"name": "Review Huddle Zone", "campus": "ramapuram", "zone_type": "review", "description": "Standups and demo day prep area", "x_position": 0, "y_position": 200, "width": 230, "height": 60},
+      {"name": "Mission Planning Room", "campus": "trichy", "zone_type": "planning", "description": "Pre-flight briefing room with mission planning stations", "x_position": 0, "y_position": 0, "width": 100, "height": 80},
+      {"name": "Field Equipment Room", "campus": "trichy", "zone_type": "equipment", "description": "Transport cases, spares, field-ready kits", "x_position": 110, "y_position": 0, "width": 80, "height": 80},
+      {"name": "Workshop Benches", "campus": "trichy", "zone_type": "workshop", "description": "Pre/post-flight maintenance benches", "x_position": 0, "y_position": 90, "width": 190, "height": 80},
+      {"name": "Outdoor Launch Zones", "campus": "trichy", "zone_type": "flight_ops", "description": "Launch/recovery zones with clear safety perimeters", "x_position": 200, "y_position": 0, "width": 200, "height": 170},
+      {"name": "Battery Charging Bay", "campus": "trichy", "zone_type": "safety", "description": "Charging/quarantine area separated from classrooms", "x_position": 0, "y_position": 180, "width": 100, "height": 70},
+      {"name": "Data Processing Station", "campus": "trichy", "zone_type": "data", "description": "Download and processing stations for field data", "x_position": 110, "y_position": 180, "width": 90, "height": 70},
+      {"name": "Visitor Demo Corridor", "campus": "trichy", "zone_type": "showcase", "description": "Partner walkthrough corridor", "x_position": 200, "y_position": 180, "width": 200, "height": 70}
+    ],
+    "procurement_items": [
+      {"category": "Workshop Benches", "item_name": "ESD-safe Student Tables", "campus_priority": "both", "quantity_notes": "1 seat per active student + 20% buffer", "spend_bucket": 1, "estimated_cost": 250000},
+      {"category": "Electronics Tools", "item_name": "Soldering Stations + Hot-air Rework", "campus_priority": "both", "quantity_notes": "1 shared tool set per 4-5 students", "spend_bucket": 1, "estimated_cost": 120000},
+      {"category": "Electronics Tools", "item_name": "Multimeters, Bench PSU, Oscilloscopes", "campus_priority": "both", "quantity_notes": "Shared bench cluster", "spend_bucket": 1, "estimated_cost": 180000},
+      {"category": "Fabrication", "item_name": "Industrial/Prosumer 3D Printers", "campus_priority": "ramapuram", "quantity_notes": "2-3 printers initially", "spend_bucket": 1, "estimated_cost": 200000},
+      {"category": "Simulation", "item_name": "RPTO-aware Simulator Stations", "campus_priority": "both", "quantity_notes": "2-4 pods start; expandable", "spend_bucket": 1, "estimated_cost": 350000},
+      {"category": "Indoor Test", "item_name": "Flight Cage / Enclosed Safe Test Zone", "campus_priority": "ramapuram", "quantity_notes": "1 good cage beats multiple poor ones", "spend_bucket": 1, "estimated_cost": 80000},
+      {"category": "Training Drones", "item_name": "Micro Trainers + Assembly Kits", "campus_priority": "both", "quantity_notes": "Designed for attrition and repeated learning", "spend_bucket": 1, "estimated_cost": 150000},
+      {"category": "Flight Assets", "item_name": "DGCA-listed Training/Mission Drones", "campus_priority": "trichy", "quantity_notes": "Buy minimal viable set, not vanity fleet", "spend_bucket": 2, "estimated_cost": 500000},
+      {"category": "Field Operations", "item_name": "Cases, Windsock, First-Aid, Telemetry", "campus_priority": "trichy", "quantity_notes": "1 field kit per deployed mission team", "spend_bucket": 1, "estimated_cost": 120000},
+      {"category": "Data and GIS", "item_name": "Processing Workstations + Software Stack", "campus_priority": "trichy", "quantity_notes": "Shared high-performance cluster", "spend_bucket": 2, "estimated_cost": 300000},
+      {"category": "Store and Safety", "item_name": "Inventory Shelves, Battery Charging/Quarantine", "campus_priority": "both", "quantity_notes": "Non-negotiable", "spend_bucket": 1, "estimated_cost": 100000}
+    ],
+    "partners": [
+      {"name": "Dronobotics / DronoSim", "type": "vendor", "description": "Indigenous simulator positioned for RPTO infrastructure readiness"},
+      {"name": "Autoabode", "type": "vendor", "description": "Turnkey drone lab provider - hardware kits, simulator stations, 3D printing, indoor cage"},
+      {"name": "SkyySkill Labs", "type": "vendor", "description": "AI-ready drone lab / CoE setup provider with NEP/NSQF alignment"},
+      {"name": "Aerdroids", "type": "rpto", "description": "Claims DGCA-authorized RPTO status and small-batch training orientation"},
+      {"name": "GATI", "type": "rpto", "description": "Claims DGCA-approved RPTO status, 5-day training structure"},
+      {"name": "DroneAcharya", "type": "training_partner", "description": "Training, manufacturing, services and Train-the-Trainer positioning"},
+      {"name": "DigitalSky DGCA", "type": "government", "description": "Official airspace / support touchpoint for drone operations", "status": "active"}
+    ]
+  }
+}
