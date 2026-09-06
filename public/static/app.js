@@ -20,6 +20,8 @@
     setupTab: 'tracker',
     setupStageId: 0,
     theme: localStorage.getItem('srm_theme') || 'night',
+    campusScope: localStorage.getItem('srm_campus_scope') || 'both',
+    campusLocked: localStorage.getItem('srm_campus_locked') === 'true',
     spaceRoomId: 0,
     facilityMode: 'zones' // 'zones' (existing facility map) | 'planner' (sqft space planner)
   }
@@ -40,6 +42,28 @@
     if (state.activeView === 'facility') initThreeJS()
   }
   window._toggleTheme = toggleTheme
+
+  function campusLabel(scope) { return scope === 'ramapuram' ? 'Ramapuram' : scope === 'trichy' ? 'Trichy' : 'All campuses' }
+  function setCampusScope(scope) {
+    if (state.campusLocked && scope !== state.campusScope) return toast('Campus scope is locked. Unlock it to switch sites.', 'error')
+    state.campusScope = scope
+    localStorage.setItem('srm_campus_scope', scope)
+    state.facilityCampus = scope === 'trichy' ? 'trichy' : 'ramapuram'
+    if ($('#campus-scope-bar')) renderApp()
+  }
+  function toggleCampusLock() {
+    state.campusLocked = !state.campusLocked
+    localStorage.setItem('srm_campus_locked', String(state.campusLocked))
+    updateCampusScopeUI()
+  }
+  function updateCampusScopeUI() {
+    $$('.campus-scope-btn').forEach(b => {
+      const active = b.dataset.scope === state.campusScope
+      b.className = `campus-scope-btn px-3 py-1.5 rounded-lg text-xs font-semibold transition ${active ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/30' : 'text-slate-400 hover:text-slate-200 border border-transparent'}`
+    })
+    const lock = $('#campus-lock-toggle')
+    if (lock) { lock.innerHTML = `<i class="fas ${state.campusLocked ? 'fa-lock' : 'fa-lock-open'} mr-1"></i>${state.campusLocked ? 'Locked' : 'Unlocked'}`; lock.className = `px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${state.campusLocked ? 'bg-amber-500/15 text-amber-300 border-amber-400/30' : 'text-slate-400 border-slate-700 hover:text-slate-200'}` }
+  }
   // Apply persisted theme on boot (before first paint of views)
   if (state.theme === 'day') document.body.classList.add('day-mode')
 
@@ -102,21 +126,19 @@
   // ── PREMIUM LOGIN SCREEN — passcodes hidden ──────────────
   function renderLogin() {
     root.innerHTML = `
-      <main class="min-h-screen flex items-center justify-center p-6 relative">
-        <section class="w-full max-w-md relative z-10">
-          <header class="text-center mb-8">
-            <div class="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-cyan-500/20 border border-indigo-500/30 mb-5 float-anim">
-              <i class="fas fa-drone text-3xl text-indigo-400"></i>
-            </div>
-            <h1 class="text-3xl font-extrabold tracking-tight">
-              <span class="bg-gradient-to-r from-indigo-400 via-purple-400 to-cyan-400 bg-clip-text text-transparent glow-text">SRM dROIds</span>
-            </h1>
-            <p class="text-slate-400 mt-2 text-sm max-w-xs mx-auto">Dual-Campus Drone Centre of Excellence &mdash; Mission Control</p>
-            <div class="flex items-center justify-center gap-4 mt-4 text-xs text-slate-500">
-              <span class="flex items-center gap-1"><i class="fas fa-map-marker-alt text-indigo-400"></i> Ramapuram</span>
-              <span class="flex items-center gap-1"><i class="fas fa-map-marker-alt text-cyan-400"></i> Trichy</span>
-            </div>
-          </header>
+      <main class="mission-landing min-h-screen relative overflow-hidden">
+        <div id="landing-3d" class="landing-3d" aria-hidden="true"></div>
+        <div class="landing-noise" aria-hidden="true"></div>
+        <div class="max-w-7xl mx-auto min-h-screen grid lg:grid-cols-[1.15fr_0.85fr] gap-10 items-center p-6 sm:p-10 lg:p-16 relative z-10">
+          <section class="landing-copy">
+            <div class="eyebrow"><span class="eyebrow-dot"></span> Centre of Excellence / Mission Control</div>
+            <h1 class="landing-title">Build the next<br><span>airspace, together.</span></h1>
+            <p class="landing-lede">A live operating view for SRM dROIds — where people, platforms, facilities and decisions move in the same direction.</p>
+            <div class="landing-pills"><span><i class="fas fa-location-dot"></i> Ramapuram</span><span><i class="fas fa-location-dot"></i> Trichy</span><span><i class="fas fa-satellite-dish"></i> Live CoE system</span></div>
+            <div class="landing-stats"><div><strong>02</strong><span>campuses</span></div><div><strong>360°</strong><span>operational lens</span></div><div><strong>01</strong><span>shared mission</span></div></div>
+          </section>
+          <section class="login-panel-wrap relative z-20">
+            <div class="login-panel-kicker"><span class="pulse-dot"></span> Secure role access</div>
 
           <form id="login-form" class="glass-card rounded-2xl p-8 space-y-5">
             <div id="login-error" class="hidden bg-red-500/10 border border-red-500/30 rounded-xl p-3 text-red-400 text-sm flex items-center gap-2">
@@ -134,8 +156,12 @@
               <i class="fas fa-rocket"></i> Enter Mission Control
             </button>
           </form>
-        </section>
+          <p class="text-center text-xs text-slate-500 mt-4">Your role determines the tools, data and actions available in Mission Control.</p>
+          </section>
+        </div>
       </main>`
+
+    initLanding3D()
 
     $('#login-form').addEventListener('submit', async (e) => {
       e.preventDefault()
@@ -156,15 +182,15 @@
       }
     })
 
-    gsap.from('header', { y: -30, opacity: 0, duration: 0.7, ease: 'power2.out' })
-    gsap.from('#login-form', { y: 20, opacity: 0, duration: 0.5, delay: 0.2, ease: 'power2.out' })
+    animateIn('.landing-copy', { y: 18, opacity: 0, duration: 0.65, ease: 'power2.out' })
+    animateIn('#login-form', { y: 20, opacity: 0, duration: 0.5, delay: 0.15, ease: 'power2.out' })
   }
 
   function showLoginError(msg) {
     const el = $('#login-error')
     el.querySelector('span').textContent = msg
     el.classList.remove('hidden')
-    gsap.from(el, { x: -10, opacity: 0, duration: 0.3 })
+    if (window.gsap) gsap.from(el, { x: -10, opacity: 0, duration: 0.3 })
   }
 
   // ── MAIN APP SHELL ───────────────────────────────────────
@@ -185,7 +211,7 @@
               ${isVenture ? 'Venture Owner' : isSupervisor ? 'Supervisor' : 'CoE Leader'}
             </span>
           </div>
-          <div class="flex items-center gap-1 sm:gap-2" id="nav-tabs"></div>
+          <div class="nav-scroll flex-1 min-w-0 mx-2 sm:mx-4"><div class="flex items-center justify-start lg:justify-center gap-1 sm:gap-2 overflow-x-auto no-scrollbar pb-0.5" id="nav-tabs"></div></div>
           <div class="flex items-center gap-1">
             <button id="theme-toggle" title="Toggle day / night mode" class="text-slate-500 hover:text-amber-300 px-3 py-2 rounded-xl hover:bg-slate-800/50 transition text-sm border border-transparent hover:border-slate-700/50">
               <i class="fas fa-sun theme-icon-sun"></i><i class="fas fa-moon theme-icon-moon"></i>
@@ -196,13 +222,23 @@
           </div>
         </div>
       </nav>
+      <div id="campus-scope-bar" class="scope-bar sticky top-16 z-40 border-b border-slate-800/70">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center gap-2">
+          <span class="text-[10px] uppercase tracking-[.16em] text-slate-500 mr-1"><i class="fas fa-layer-group mr-1 text-cyan-400"></i>Data scope</span>
+          <button class="campus-scope-btn" data-scope="ramapuram">Ramapuram</button><button class="campus-scope-btn" data-scope="trichy">Trichy</button><button class="campus-scope-btn" data-scope="both">All campuses</button>
+          <button id="campus-lock-toggle" class="ml-auto" title="Lock the active campus scope"></button>
+          <span class="scope-hint hidden md:inline text-[10px] text-slate-500">New records inherit this scope</span>
+        </div>
+      </div>
       <main id="main-content" class="max-w-7xl mx-auto px-4 sm:px-6 py-8"></main>`
 
     // Build nav tabs
     const tabs = isSupervisor
       ? [
-          { id: 'facility', icon: 'fa-cube', label: 'Space Planner' },
+          { id: 'dashboard', icon: 'fa-chart-pie', label: 'Overview' },
+          { id: 'facility', icon: 'fa-building', label: 'Facility' },
           { id: 'supervisor-ai', icon: 'fa-shield-alt', label: 'AI Advisory' },
+          { id: 'bulletins', icon: 'fa-bullhorn', label: 'Bulletins' },
           { id: 'reports', icon: 'fa-file-alt', label: 'Reports' }
         ]
       : isVenture
@@ -235,19 +271,22 @@
       navTabs.appendChild(btn)
     })
 
-    document.addEventListener('click', (e) => {
+    navTabs.addEventListener('click', (e) => {
       const tab = e.target.closest('.nav-tab')
       if (tab) { state.activeView = tab.dataset.view; navigateView() }
     })
+    $$('.campus-scope-btn').forEach(b => b.addEventListener('click', () => setCampusScope(b.dataset.scope)))
+    $('#campus-lock-toggle').addEventListener('click', toggleCampusLock)
 
     $('#logout-btn').addEventListener('click', () => {
       state.role = null; state.session = null; state.passcode = null; state.activeView = 'dashboard'; renderLogin()
     })
     $('#theme-toggle').addEventListener('click', toggleTheme)
     applyTheme()
+    updateCampusScopeUI()
 
     navigateView()
-    gsap.from('#main-nav', { y: -60, opacity: 0, duration: 0.5, ease: 'power2.out' })
+    animateIn('#main-nav', { y: -20, opacity: 0, duration: 0.5, ease: 'power2.out' })
   }
 
   function navigateView() {
@@ -785,7 +824,8 @@
             </div>
             ${!isPlanner ? `<div class="flex gap-1 bg-slate-900/60 rounded-xl p-1 border border-slate-800">
               <button id="fac-ramapuram" class="campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-600 text-white">Ramapuram</button>
-              <button id="fac-trichy" class="campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200">Trichy</button>
+              <button id="fac-trichy" class="campus-toggle px-3 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200">Trichy</button>
+              <button id="fac-both" class="campus-toggle px-3 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200">All</button>
             </div>` : ''}
           </div>
         </div>
@@ -802,16 +842,20 @@
         <div id="three-container" class="glass-card rounded-2xl" style="height:500px;"></div>
         <div id="facility-legend" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
       </div>`
-    document.getElementById('fac-ramapuram').addEventListener('click', () => { state.facilityCampus = 'ramapuram'; updateCampusToggles(); initThreeJS() })
-    document.getElementById('fac-trichy').addEventListener('click', () => { state.facilityCampus = 'trichy'; updateCampusToggles(); initThreeJS() })
+    document.getElementById('fac-ramapuram').addEventListener('click', () => { if (state.campusLocked && state.campusScope !== 'ramapuram') return toast('Campus scope is locked. Unlock it to switch sites.', 'error'); state.facilityCampus = 'ramapuram'; state.campusScope = 'ramapuram'; localStorage.setItem('srm_campus_scope', 'ramapuram'); updateCampusScopeUI(); updateCampusToggles(); initThreeJS() })
+    document.getElementById('fac-trichy').addEventListener('click', () => { if (state.campusLocked && state.campusScope !== 'trichy') return toast('Campus scope is locked. Unlock it to switch sites.', 'error'); state.facilityCampus = 'trichy'; state.campusScope = 'trichy'; localStorage.setItem('srm_campus_scope', 'trichy'); updateCampusScopeUI(); updateCampusToggles(); initThreeJS() })
+    document.getElementById('fac-both').addEventListener('click', () => { state.campusScope = 'both'; localStorage.setItem('srm_campus_scope', 'both'); updateCampusToggles(); renderFacilityView() })
+    updateCampusToggles()
     initThreeJS()
   }
 
   function updateCampusToggles() {
     const r = $('#fac-ramapuram'), t = $('#fac-trichy')
     if (!r || !t) return
-    if (state.facilityCampus === 'ramapuram') { r.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-600 text-white'; t.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200' }
-    else { t.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-600 text-white'; r.className = 'campus-toggle px-4 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200' }
+    const b = $('#fac-both'); const active = 'campus-toggle px-3 py-2 rounded-lg text-sm font-medium transition bg-indigo-600 text-white'; const idle = 'campus-toggle px-3 py-2 rounded-lg text-sm font-medium transition text-slate-400 hover:text-slate-200'
+    r.className = state.campusScope === 'ramapuram' || (state.campusScope === 'both' && state.facilityCampus === 'ramapuram') ? active : idle
+    t.className = state.campusScope === 'trichy' || (state.campusScope === 'both' && state.facilityCampus === 'trichy') ? active : idle
+    if (b) b.className = state.campusScope === 'both' ? active : idle
   }
 
   // ── SPACE PLANNER — sqft room config + 3D footprint layout ──
@@ -822,7 +866,8 @@
     const body = $('#facility-body')
     if (!body) return
     try {
-      const { data: rooms } = await API.get('/space/rooms')
+      const roomQuery = state.campusScope === 'both' ? '' : `?campus=${state.campusScope}`
+      const { data: rooms } = await API.get(`/space/rooms${roomQuery}`)
       if (!state.spaceRoomId || !rooms.find(r => r.id === state.spaceRoomId)) {
         state.spaceRoomId = rooms.length ? rooms[0].id : 0
       }
@@ -1598,6 +1643,41 @@
     $('#sup-analyze').onclick = async () => { const btn = $('#sup-analyze'); btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner animate-spin mr-2"></i>Reviewing…'; try { const { data } = await API.post('/supervisor/advisories/analyze', { room_id: $('#sup-room').value || null, prompt: $('#sup-prompt').value, source_material: $('#sup-source').value }); const results = $('#sup-results'); results.innerHTML = (data.advisories || []).map((a, i) => `<div class="rounded-xl border ${a.severity === 'critical' || a.severity === 'high' ? 'border-red-500/30 bg-red-500/5' : 'border-slate-700/70 bg-slate-800/40'} p-3"><div class="flex items-center justify-between"><span class="font-medium text-sm">${a.title}</span><span class="text-[10px] uppercase tracking-wider text-amber-300">${a.severity}</span></div><p class="text-xs text-slate-300 mt-2">${a.advisory}</p><button class="sup-push mt-3 text-xs px-3 py-1.5 rounded-lg bg-indigo-500/15 border border-indigo-500/30 text-indigo-300" data-id="${data.ids?.[i] || ''}">Push to CoE bulletin</button></div>`).join('') || '<p class="text-sm text-slate-500">No advisory returned.</p>'; $$('.sup-push').forEach(b => b.onclick = async () => { await API.post(`/supervisor/advisories/${b.dataset.id}/push`); b.textContent = 'Pushed to CoE bulletin'; b.disabled = true; toast('Advisory pushed to CoE leader', 'success') }) } catch (e) { toast(e.response?.data?.error || e.message, 'error') } btn.disabled = false; btn.innerHTML = '<i class="fas fa-robot mr-2"></i>Run supervisor review' }
   }
 
+  // Lightweight landing scene: a calm orbital network that reinforces the CoE theme
+  // without blocking the login form or requiring any additional asset.
+  function initLanding3D() {
+    const container = $('#landing-3d')
+    if (!container || !window.THREE) return
+    try {
+    const W = container.clientWidth || window.innerWidth
+    const H = container.clientHeight || window.innerHeight
+    const scene = new THREE.Scene()
+    const camera = new THREE.PerspectiveCamera(42, W / H, 0.1, 100)
+    camera.position.set(0, 1.2, 7.5)
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.8))
+    renderer.setSize(W, H)
+    container.appendChild(renderer.domElement)
+    scene.add(new THREE.AmbientLight(0x8da2ff, 1.4))
+    const key = new THREE.PointLight(0x38bdf8, 8, 16); key.position.set(2, 3, 4); scene.add(key)
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.9, 2), new THREE.MeshBasicMaterial({ color: 0x6366f1, wireframe: true, transparent: true, opacity: 0.55 }))
+    scene.add(core)
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(0.55, 32, 32), new THREE.MeshBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.12 }))
+    scene.add(glow)
+    const orbitMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.25 })
+    ;[[2.0, 0.18], [2.7, -0.24], [3.35, 0.38]].forEach(([r, tilt]) => {
+      const pts = []; for (let i = 0; i <= 96; i++) { const a = i / 96 * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a) * r, Math.sin(a) * r * 0.32, Math.sin(a) * r)) }
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), orbitMat); line.rotation.x = tilt; scene.add(line)
+    })
+    const nodes = new THREE.Group()
+    for (let i = 0; i < 42; i++) { const a = Math.random() * Math.PI * 2, r = 2.2 + Math.random() * 2.8; const dot = new THREE.Mesh(new THREE.SphereGeometry(0.018 + Math.random() * 0.025, 8, 8), new THREE.MeshBasicMaterial({ color: i % 3 ? 0x818cf8 : 0x67e8f9 })); dot.position.set(Math.cos(a) * r, (Math.random() - 0.5) * 2.2, Math.sin(a) * r); nodes.add(dot) }
+    scene.add(nodes)
+    const tick = () => { if (!document.getElementById('landing-3d')) return; requestAnimationFrame(tick); core.rotation.x += 0.002; core.rotation.y += 0.004; nodes.rotation.y -= 0.0015; renderer.render(scene, camera) }
+    tick()
+    window.addEventListener('resize', () => { if (!document.getElementById('landing-3d')) return; const w = container.clientWidth, h = container.clientHeight; camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h) }, { passive: true })
+    } catch (e) { container.innerHTML = ''; container.classList.add('landing-3d-fallback') }
+  }
+
   async function renderBulletinsView() {
     const content = $('#main-content'); const { data: bulletins } = await API.get('/supervisor/bulletins')
     content.innerHTML = `<div class="space-y-6"><div><h2 class="text-xl font-bold">AI Bulletins</h2><p class="text-sm text-slate-400">Supervisor advisories pushed for CoE leader acknowledgement.</p></div><div class="space-y-3">${bulletins.length ? bulletins.map(a => `<div class="glass-card rounded-2xl p-5"><div class="flex items-start justify-between gap-3"><div><span class="text-[10px] uppercase tracking-wider text-amber-300">${a.severity} · ${a.category}</span><h3 class="font-semibold mt-1">${a.title}</h3><p class="text-sm text-slate-300 mt-2">${a.advisory}</p><p class="text-xs text-slate-500 mt-3">${a.room_name || 'All rooms'}${a.item_name ? ` · ${a.item_name}` : ''}</p></div><div class="text-right">${a.status === 'acknowledged' || a.status === 'actioned' ? '<span class="text-xs text-emerald-400"><i class="fas fa-check mr-1"></i>Acknowledged</span>' : `<button class="ack-bulletin text-xs px-3 py-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300" data-id="${a.id}">Acknowledge</button>`}</div></div></div>`).join('') : '<div class="glass-card rounded-2xl p-10 text-center text-slate-500">No pushed advisories yet.</div>'}</div></div>`
@@ -1764,7 +1844,8 @@
     const content = $('#main-content')
     const isVenture = state.role === 'venture_owner'
     try {
-      const { data: tracker } = await API.get('/tracker')
+      const trackerScope = state.campusScope === 'both' ? '' : `?campus=${state.campusScope}`
+      const { data: tracker } = await API.get(`/tracker${trackerScope}`)
       const { data: analytics } = await API.get('/tracker/analytics')
       const { data: submissions } = await API.get('/tracker/submissions')
       const { data: decisions } = await API.get('/tracker/decisions')
@@ -1788,7 +1869,7 @@
         <div class="space-y-6">
           <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
-              <h2 class="text-xl font-bold">Foundational Setup Tracker</h2>
+              <h2 class="text-xl font-bold">${campusLabel(state.campusScope)} Setup Tracker</h2>
               <p class="text-sm text-slate-400">${isVenture
                 ? 'Bird\'s-eye view of the CoE setup — review submissions, guide next steps, take decisions'
                 : 'Build the CoE foundation line by line — planning, design, procurement, deployment, readiness'}</p>
@@ -1964,6 +2045,7 @@
       <tr class="border-t border-slate-800/30 hover:bg-slate-800/20 transition align-top" id="li-row-${it.id}">
         <td class="p-2.5">
           <div class="font-medium text-slate-200">${it.item_name}</div>
+          <div class="mt-1 flex items-center gap-1.5"><span class="scope-chip"><i class="fas fa-${it.campus_scope === 'trichy' ? 'location-dot' : 'layer-group'} mr-1"></i>${campusLabel(it.campus_scope)}</span>${it.campus_locked ? '<span class="scope-lock"><i class="fas fa-lock mr-1"></i>locked</span>' : ''}</div>
           ${it.description ? `<div class="text-[10px] text-slate-500 mt-0.5">${it.description}</div>` : ''}
           ${it.notes ? `<div class="text-[10px] text-slate-500 italic mt-0.5"><i class="fas fa-sticky-note mr-1 text-slate-600"></i>${it.notes}</div>` : ''}
         </td>
@@ -2155,6 +2237,10 @@
           <input name="action_item" value="${d.action_item || ''}" placeholder="e.g., Collect 2nd quotation and compare service terms" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></div>
         <div><label class="text-xs text-slate-400">Notes</label>
           <textarea name="notes" rows="2" placeholder="Free-form notes about this line item..." class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500">${d.notes || ''}</textarea></div>
+        <div class="scope-editor rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3">
+          <div class="flex items-center justify-between gap-3"><div><div class="text-xs font-semibold text-cyan-300">Campus ownership</div><div class="text-[11px] text-slate-500 mt-0.5">Every line item must be attributable to a site.</div></div><i class="fas fa-shield-halved text-cyan-400"></i></div>
+          <div class="grid grid-cols-[1fr_auto] gap-2 mt-2"><select name="campus_scope" ${d.campus_locked ? 'disabled' : ''} class="bg-slate-800/80 border border-slate-700 rounded-lg px-2.5 py-2 text-xs text-slate-200"><option value="ramapuram" ${(d.campus_scope || state.campusScope) === 'ramapuram' ? 'selected' : ''}>Ramapuram</option><option value="trichy" ${(d.campus_scope || state.campusScope) === 'trichy' ? 'selected' : ''}>Trichy</option><option value="both" ${(d.campus_scope || state.campusScope) === 'both' ? 'selected' : ''}>Both campuses</option></select><label class="flex items-center gap-1.5 text-xs text-slate-400"><input name="campus_locked" type="checkbox" value="1" ${d.campus_locked ? 'checked' : ''}> Lock</label></div>
+        </div>
         <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow"><i class="fas fa-save mr-1"></i> ${editData ? 'Save Changes' : 'Add Line Item'}</button>
       </form>`)
 
@@ -2162,6 +2248,8 @@
       e.preventDefault()
       const fd = new FormData(e.target)
       const payload = Object.fromEntries(fd.entries())
+      payload.campus_scope = payload.campus_scope || d.campus_scope || state.campusScope
+      payload.campus_locked = fd.get('campus_locked') ? true : false
       payload.estimated_cost = parseFloat(payload.estimated_cost) || 0
       payload.actual_cost = parseFloat(payload.actual_cost) || 0
       payload.progress_pct = Math.max(0, Math.min(100, parseInt(payload.progress_pct) || 0))
@@ -2191,6 +2279,7 @@
           <textarea name="description" rows="2" placeholder="What this section covers..." class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
         <div><label class="text-xs text-slate-400">Best-Practice Summary (tooltip)</label>
           <textarea name="guideline_summary" rows="2" placeholder="One-line best-practice guidance shown as a tooltip on this section header..." class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
+        <div class="grid grid-cols-[1fr_auto] gap-2 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3"><select name="campus_scope" class="bg-slate-800/80 border border-slate-700 rounded-lg px-2.5 py-2 text-xs text-slate-200"><option value="ramapuram" ${state.campusScope === 'ramapuram' ? 'selected' : ''}>Ramapuram</option><option value="trichy" ${state.campusScope === 'trichy' ? 'selected' : ''}>Trichy</option><option value="both" ${state.campusScope === 'both' ? 'selected' : ''}>Both campuses</option></select><label class="flex items-center gap-1.5 text-xs text-slate-400"><input name="campus_locked" type="checkbox" value="1" ${state.campusLocked ? 'checked' : ''}> Lock</label></div>
         <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow"><i class="fas fa-plus mr-1"></i> Create Section</button>
       </form>`)
     $('#section-form').addEventListener('submit', async (e) => {

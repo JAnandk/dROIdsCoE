@@ -728,11 +728,15 @@ app.put('/api/submissions/report/:id', async (c) => {
 // Full tracker tree: stages → sections (with guidelines) → line items
 app.get('/api/tracker', async (c) => {
   const db = c.env.DB
+  const scope = c.req.query('campus')
+  const scoped = scope === 'ramapuram' || scope === 'trichy'
+  const scopeClause = scoped ? ` WHERE campus_scope IN (?, 'both')` : ''
+  const scopeBind = scoped ? [scope] : []
   const [stages, sections, guidelines, items] = await Promise.all([
-    db.prepare('SELECT * FROM setup_stages ORDER BY sort_order').all(),
-    db.prepare('SELECT * FROM setup_sections ORDER BY sort_order').all(),
-    db.prepare('SELECT * FROM setup_guidelines ORDER BY sort_order').all(),
-    db.prepare('SELECT * FROM setup_line_items ORDER BY sort_order, id').all()
+    scoped ? db.prepare(`SELECT * FROM setup_stages${scopeClause} ORDER BY sort_order`).bind(...scopeBind).all() : db.prepare('SELECT * FROM setup_stages ORDER BY sort_order').all(),
+    scoped ? db.prepare(`SELECT * FROM setup_sections${scopeClause} ORDER BY sort_order`).bind(...scopeBind).all() : db.prepare('SELECT * FROM setup_sections ORDER BY sort_order').all(),
+    scoped ? db.prepare(`SELECT * FROM setup_guidelines${scopeClause} ORDER BY sort_order`).bind(...scopeBind).all() : db.prepare('SELECT * FROM setup_guidelines ORDER BY sort_order').all(),
+    scoped ? db.prepare(`SELECT * FROM setup_line_items${scopeClause} ORDER BY sort_order, id`).bind(...scopeBind).all() : db.prepare('SELECT * FROM setup_line_items ORDER BY sort_order, id').all()
   ])
   const glBySection: Record<number, any[]> = {}
   for (const g of guidelines.results as any[]) {
@@ -820,22 +824,24 @@ app.get('/api/tracker/analytics', async (c) => {
 
 // ── Sections CRUD ──────────────────────────────────────────
 app.post('/api/tracker/sections', async (c) => {
-  const { stage_id, title, description, guideline_summary, owner_role, sort_order } = await c.req.json()
+  const { stage_id, title, description, guideline_summary, owner_role, sort_order, campus_scope, campus_locked } = await c.req.json()
   if (!stage_id || !title) return c.json({ error: 'stage_id and title required' }, 400)
   const r = await c.env.DB.prepare(
-    'INSERT INTO setup_sections (stage_id, title, description, guideline_summary, owner_role, sort_order) VALUES (?,?,?,?,?,?)'
-  ).bind(stage_id, title, description || '', guideline_summary || '', owner_role || 'coe_leader', sort_order || 99).run()
+    'INSERT INTO setup_sections (stage_id, title, description, guideline_summary, owner_role, sort_order, campus_scope, campus_locked) VALUES (?,?,?,?,?,?,?,?)'
+  ).bind(stage_id, title, description || '', guideline_summary || '', owner_role || 'coe_leader', sort_order || 99, campus_scope || 'both', campus_locked ? 1 : 0).run()
   return c.json({ ok: true, id: r.meta.last_row_id })
 })
 
 app.put('/api/tracker/sections/:id', async (c) => {
   const id = c.req.param('id')
   const b = await c.req.json()
+  const current: any = await c.env.DB.prepare('SELECT campus_scope, campus_locked FROM setup_sections WHERE id=?').bind(id).first()
+  if (current?.campus_locked && b.campus_scope && b.campus_scope !== current.campus_scope) return c.json({ error: 'This section campus is locked. Unlock it before changing scope.' }, 409)
   await c.env.DB.prepare(
     `UPDATE setup_sections SET title = COALESCE(?, title), description = COALESCE(?, description),
      guideline_summary = COALESCE(?, guideline_summary), status = COALESCE(?, status),
-     sort_order = COALESCE(?, sort_order), updated_at = datetime('now') WHERE id = ?`
-  ).bind(b.title ?? null, b.description ?? null, b.guideline_summary ?? null, b.status ?? null, b.sort_order ?? null, id).run()
+     sort_order = COALESCE(?, sort_order), campus_scope = COALESCE(?, campus_scope), campus_locked = COALESCE(?, campus_locked), updated_at = datetime('now') WHERE id = ?`
+  ).bind(b.title ?? null, b.description ?? null, b.guideline_summary ?? null, b.status ?? null, b.sort_order ?? null, b.campus_scope ?? null, b.campus_locked === undefined ? null : (b.campus_locked ? 1 : 0), id).run()
   return c.json({ ok: true })
 })
 
@@ -860,18 +866,20 @@ app.post('/api/tracker/items', async (c) => {
   if (!b.section_id || !b.item_name) return c.json({ error: 'section_id and item_name required' }, 400)
   const r = await c.env.DB.prepare(
     `INSERT INTO setup_line_items (section_id, item_name, description, stakeholder, quantity_notes, vendor,
-      priority, estimated_cost, actual_cost, progress_pct, status, action_item, due_date, notes, sort_order)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      priority, estimated_cost, actual_cost, progress_pct, status, action_item, due_date, notes, sort_order, campus_scope, campus_locked)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(b.section_id, b.item_name, b.description || '', b.stakeholder || '', b.quantity_notes || '',
     b.vendor || '', b.priority || 'medium', b.estimated_cost || 0, b.actual_cost || 0,
     b.progress_pct || 0, b.status || 'not_started', b.action_item || '', b.due_date || '', b.notes || '',
-    b.sort_order || 99).run()
+    b.sort_order || 99, b.campus_scope || 'both', b.campus_locked ? 1 : 0).run()
   return c.json({ ok: true, id: r.meta.last_row_id })
 })
 
 app.put('/api/tracker/items/:id', async (c) => {
   const id = c.req.param('id')
   const b = await c.req.json()
+  const current: any = await c.env.DB.prepare('SELECT campus_scope, campus_locked FROM setup_line_items WHERE id=?').bind(id).first()
+  if (current?.campus_locked && b.campus_scope && b.campus_scope !== current.campus_scope) return c.json({ error: 'This item campus is locked. Unlock it before changing scope.' }, 409)
   await c.env.DB.prepare(
     `UPDATE setup_line_items SET item_name = COALESCE(?, item_name), description = COALESCE(?, description),
      stakeholder = COALESCE(?, stakeholder), quantity_notes = COALESCE(?, quantity_notes),
@@ -880,11 +888,12 @@ app.put('/api/tracker/items/:id', async (c) => {
      progress_pct = COALESCE(?, progress_pct), status = COALESCE(?, status),
      action_item = COALESCE(?, action_item), due_date = COALESCE(?, due_date), notes = COALESCE(?, notes),
      review_status = COALESCE(?, review_status), reviewer_notes = COALESCE(?, reviewer_notes),
+     campus_scope = COALESCE(?, campus_scope), campus_locked = COALESCE(?, campus_locked),
      updated_at = datetime('now') WHERE id = ?`
   ).bind(b.item_name ?? null, b.description ?? null, b.stakeholder ?? null, b.quantity_notes ?? null,
     b.vendor ?? null, b.priority ?? null, b.estimated_cost ?? null, b.actual_cost ?? null,
     b.progress_pct ?? null, b.status ?? null, b.action_item ?? null, b.due_date ?? null, b.notes ?? null,
-    b.review_status ?? null, b.reviewer_notes ?? null, id).run()
+    b.review_status ?? null, b.reviewer_notes ?? null, b.campus_scope ?? null, b.campus_locked === undefined ? null : (b.campus_locked ? 1 : 0), id).run()
   return c.json({ ok: true })
 })
 
