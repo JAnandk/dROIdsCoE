@@ -7,11 +7,12 @@
     "nodejs_compat"
   ],
   "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "srm-droids-coe-prod",
-      "database_id": "srm-droids-coe-prod-id"
-    }
+{
+  "name": "droidscoe",
+  "main": "dist/_worker.js",
+  "compatibility_date": "2026-09-06"
+}
+
   ]
 {
   "name": "droidscoe",
