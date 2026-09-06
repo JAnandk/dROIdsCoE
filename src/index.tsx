@@ -5,12 +5,49 @@ import { renderer } from './renderer'
 
 type Bindings = {
   DB: D1Database
+  LLM_TOKEN_ENCRYPTION_KEY?: string
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
 
 app.use(renderer)
 app.use('/api/*', cors())
+
+async function getSession(c: any) {
+  const token = c.req.header('x-srm-session')
+  if (!token) return null
+  return c.env.DB.prepare(`SELECT * FROM app_sessions WHERE token=? AND revoked_at IS NULL AND expires_at > datetime('now')`).bind(token).first()
+}
+
+async function requireRole(c: any, role: string) {
+  const session: any = await getSession(c)
+  return session?.role === role ? session : null
+}
+
+async function audit(c: any, action: string, entityType?: string, entityId?: number, metadata: any = {}) {
+  const session: any = await getSession(c)
+  await c.env.DB.prepare('INSERT INTO security_audit_log (actor_role, action, entity_type, entity_id, metadata) VALUES (?,?,?,?,?)')
+    .bind(session?.role || 'anonymous', action, entityType || null, entityId || null, JSON.stringify(metadata)).run()
+}
+
+async function cryptoKey(c: any) {
+  const secret = c.env.LLM_TOKEN_ENCRYPTION_KEY || 'srm-droids-local-token-key-change-me'
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))
+  return crypto.subtle.importKey('raw', digest, 'AES-GCM', false, ['encrypt', 'decrypt'])
+}
+
+async function encryptSecret(c: any, value: string) {
+  const iv = crypto.getRandomValues(new Uint8Array(12)); const key = await cryptoKey(c)
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(value))
+  const bytes = new Uint8Array(encrypted); const merged = new Uint8Array(iv.length + bytes.length); merged.set(iv); merged.set(bytes, iv.length)
+  return btoa(String.fromCharCode(...merged))
+}
+
+async function decryptSecret(c: any, value: string) {
+  const merged = Uint8Array.from(atob(value), x => x.charCodeAt(0)); const key = await cryptoKey(c)
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: merged.slice(0, 12) }, key, merged.slice(12))
+  return new TextDecoder().decode(decrypted)
+}
 
 // ============================================================
 // AUTH
@@ -22,7 +59,10 @@ app.post('/api/auth', async (c) => {
     'SELECT id, role, label, is_active FROM access_codes WHERE passcode = ? AND is_active = 1'
   ).bind(passcode).first<{ id: number; role: string; label: string; is_active: number }>()
   if (!row) return c.json({ ok: false, error: 'Invalid passcode' }, 401)
-  return c.json({ ok: true, role: row.role, label: row.label, id: row.id })
+  const session = crypto.randomUUID()
+  await c.env.DB.prepare("INSERT INTO app_sessions (token, access_code_id, role, expires_at) VALUES (?,?,?,datetime('now','+8 hours'))").bind(session, row.id, row.role).run()
+  await audit(c, 'login', 'access_code', row.id)
+  return c.json({ ok: true, role: row.role, label: row.label, id: row.id, session })
 })
 
 app.get('/api/auth/codes', async (c) => {
@@ -34,6 +74,7 @@ app.get('/api/auth/codes', async (c) => {
 
 app.post('/api/auth/codes', async (c) => {
   const { role, passcode, label } = await c.req.json()
+  if (!['coe_leader', 'venture_owner', 'supervisor'].includes(role)) return c.json({ error: 'Invalid role' }, 400)
   await c.env.DB.prepare(
     'INSERT INTO access_codes (role, passcode, label) VALUES (?, ?, ?)'
   ).bind(role, passcode, label).run()
@@ -1031,14 +1072,18 @@ app.get('/api/space/placements', async (c) => {
   let rows
   if (roomId) {
     rows = await c.env.DB.prepare(
-      `SELECT p.*, r.name as room_name, r.width_ft as room_width, r.length_ft as room_length, r.campus
+      `SELECT p.*, r.name as room_name, r.width_ft as room_width, r.length_ft as room_length, r.campus,
+              ps.source_url, ps.source_type, ps.extracted_details
        FROM space_placements p JOIN space_rooms r ON p.room_id = r.id
+       LEFT JOIN placement_specs ps ON ps.placement_id = p.id
        WHERE p.room_id = ? ORDER BY p.sort_order, p.id`
     ).bind(roomId).all()
   } else {
     rows = await c.env.DB.prepare(
-      `SELECT p.*, r.name as room_name, r.width_ft as room_width, r.length_ft as room_length, r.campus
+      `SELECT p.*, r.name as room_name, r.width_ft as room_width, r.length_ft as room_length, r.campus,
+              ps.source_url, ps.source_type, ps.extracted_details
        FROM space_placements p JOIN space_rooms r ON p.room_id = r.id
+       LEFT JOIN placement_specs ps ON ps.placement_id = p.id
        ORDER BY p.room_id, p.sort_order, p.id`
     ).all()
   }
@@ -1053,6 +1098,9 @@ app.post('/api/space/placements', async (c) => {
      VALUES (?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(b.room_id, b.item_name, b.category || 'equipment', b.footprint_ft || 4, b.x_ft || 0, b.y_ft || 0,
     b.height_ft || 4, b.color || '#6366f1', b.status || 'planned', b.notes || '', b.sort_order || 99).run()
+  if (b.source_url || b.extracted_details) await c.env.DB.prepare(
+    'INSERT OR REPLACE INTO placement_specs (placement_id, source_url, source_type, extracted_details) VALUES (?,?,?,?)'
+  ).bind(r.meta.last_row_id, b.source_url || '', b.source_type || 'url', JSON.stringify(b.extracted_details || {})).run()
   return c.json({ ok: true, id: r.meta.last_row_id })
 })
 
@@ -1066,11 +1114,137 @@ app.put('/api/space/placements/:id', async (c) => {
      notes = COALESCE(?, notes) WHERE id = ?`
   ).bind(b.item_name ?? null, b.category ?? null, b.footprint_ft ?? null, b.x_ft ?? null, b.y_ft ?? null,
     b.height_ft ?? null, b.color ?? null, b.status ?? null, b.notes ?? null, id).run()
+  if (b.source_url !== undefined || b.extracted_details !== undefined) await c.env.DB.prepare(
+    'INSERT OR REPLACE INTO placement_specs (placement_id, source_url, source_type, extracted_details) VALUES (?,?,?,?)'
+  ).bind(id, b.source_url || '', b.source_type || 'url', JSON.stringify(b.extracted_details || {})).run()
   return c.json({ ok: true })
 })
 
 app.delete('/api/space/placements/:id', async (c) => {
   await c.env.DB.prepare('DELETE FROM space_placements WHERE id = ?').bind(c.req.param('id')).run()
+  return c.json({ ok: true })
+})
+
+// ============================================================
+// SUPERVISOR AI ROUTER + COE BULLETIN
+// ============================================================
+app.get('/api/supervisor/llm/config', async (c) => {
+  if (!await requireRole(c, 'supervisor')) return c.json({ error: 'Supervisor access required' }, 403)
+  const row = await c.env.DB.prepare('SELECT id, role, provider, base_url, model, token_budget, is_enabled, updated_at FROM supervisor_llm_configs WHERE role = ?').bind('supervisor').first()
+  return c.json(row || { role: 'supervisor', provider: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-4o-mini', token_budget: 2000, is_enabled: 1 })
+})
+
+app.put('/api/supervisor/llm/config', async (c) => {
+  if (!await requireRole(c, 'supervisor')) return c.json({ error: 'Supervisor access required' }, 403)
+  const b = await c.req.json()
+  const tokenCiphertext = b.api_token ? await encryptSecret(c, b.api_token) : null
+  await c.env.DB.prepare(`INSERT INTO supervisor_llm_configs (role, provider, base_url, model, api_token, token_ciphertext, token_budget, is_enabled)
+    VALUES ('supervisor',?,?,?,?,?,?,?) ON CONFLICT(role) DO UPDATE SET provider=excluded.provider, base_url=excluded.base_url,
+    model=excluded.model, api_token=COALESCE(excluded.api_token, supervisor_llm_configs.api_token), token_budget=excluded.token_budget,
+    token_ciphertext=COALESCE(excluded.token_ciphertext, supervisor_llm_configs.token_ciphertext), is_enabled=excluded.is_enabled, updated_at=datetime('now')`).bind(b.provider || 'openai', b.base_url || 'https://api.openai.com/v1', b.model || 'gpt-4o-mini', null, tokenCiphertext, Number(b.token_budget) || 2000, b.is_enabled === false ? 0 : 1).run()
+  await audit(c, 'llm_config_updated', 'supervisor_llm_config')
+  return c.json({ ok: true })
+})
+
+app.get('/api/supervisor/bulletins', async (c) => {
+  const rows = await c.env.DB.prepare(`SELECT a.*, r.name as room_name, p.item_name FROM planner_advisories a
+    LEFT JOIN space_rooms r ON a.room_id = r.id LEFT JOIN space_placements p ON a.placement_id = p.id
+    WHERE a.status IN ('pushed','acknowledged','actioned') ORDER BY a.created_at DESC LIMIT 100`).all()
+  return c.json(rows.results)
+})
+
+app.put('/api/supervisor/bulletins/:id/acknowledge', async (c) => {
+  const leaderSession: any = await getSession(c)
+  if (!['coe_leader', 'venture_owner'].includes(leaderSession?.role || '')) return c.json({ error: 'Leader access required' }, 403)
+  const b = await c.req.json().catch(() => ({}))
+  await c.env.DB.prepare(`UPDATE planner_advisories SET status='acknowledged', acknowledged_by=?, acknowledged_at=datetime('now') WHERE id=?`)
+    .bind(leaderSession.role, c.req.param('id')).run()
+  return c.json({ ok: true })
+})
+
+app.post('/api/supervisor/advisories/analyze', async (c) => {
+  if (!await requireRole(c, 'supervisor')) return c.json({ error: 'Supervisor access required' }, 403)
+  const b = await c.req.json()
+  const cfg: any = await c.env.DB.prepare('SELECT * FROM supervisor_llm_configs WHERE role=? AND is_enabled=1').bind('supervisor').first()
+  const apiToken = cfg?.token_ciphertext ? await decryptSecret(c, cfg.token_ciphertext) : cfg?.api_token
+  if (!apiToken) return c.json({ error: 'Configure the Supervisor LLM adapter first' }, 400)
+  const room = b.room_id ? await c.env.DB.prepare('SELECT * FROM space_rooms WHERE id=?').bind(b.room_id).first() : null
+  const placements = b.room_id ? await c.env.DB.prepare('SELECT * FROM space_placements WHERE room_id=?').bind(b.room_id).all() : { results: [] }
+  const prompt = `Analyze this facility plan from a supervisor safety and operability lens. Return JSON array with title, category, severity (low|medium|high|critical), advisory. Evaluate equipment placement, safety envelopes/clearances, chimney or exhaust, pathway routing, power/utilities, ergonomics, fire access, and human workflow. Treat manufacturer specs as unverified unless supplied. Room: ${JSON.stringify(room)}. Placements: ${JSON.stringify(placements.results)}. Source material: ${JSON.stringify(b.source_material || '')}. User focus: ${b.prompt || 'Identify critical issues and practical mitigations.'}`
+  try {
+    const response = await fetch(`${String(cfg.base_url).replace(/\/$/, '')}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiToken}` }, body: JSON.stringify({ model: cfg.model, messages: [{ role: 'system', content: 'You are a cautious industrial space-planning advisor. Do not certify compliance; flag items for qualified review.' }, { role: 'user', content: prompt }], max_tokens: cfg.token_budget, temperature: 0.2 }) })
+    if (!response.ok) return c.json({ error: `LLM API error: ${response.status}` }, 502)
+    const data: any = await response.json(); const raw = data.choices?.[0]?.message?.content || '[]'
+    const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim()
+    const advisories = JSON.parse(cleaned)
+    const ids = []
+    for (const item of (Array.isArray(advisories) ? advisories : [])) {
+      const result = await c.env.DB.prepare(`INSERT INTO planner_advisories (room_id, placement_id, title, category, severity, advisory, source, status) VALUES (?,?,?,?,?,?,?, 'draft')`)
+        .bind(b.room_id || null, b.placement_id || null, item.title || 'Planner advisory', item.category || 'safety', item.severity || 'medium', item.advisory || String(item), 'supervisor_llm').run(); ids.push(result.meta.last_row_id)
+    }
+    return c.json({ ok: true, advisories, ids, usage: data.usage })
+  } catch (e: any) { return c.json({ error: `Advisory analysis failed: ${e.message}` }, 500) }
+})
+
+app.post('/api/supervisor/advisories/:id/push', async (c) => {
+  if (!await requireRole(c, 'supervisor')) return c.json({ error: 'Supervisor access required' }, 403)
+  await c.env.DB.prepare("UPDATE planner_advisories SET status='pushed' WHERE id=?").bind(c.req.param('id')).run()
+  return c.json({ ok: true })
+})
+
+app.post('/api/supervisor/advisories/report', async (c) => {
+  if (!await requireRole(c, 'supervisor')) return c.json({ error: 'Supervisor access required' }, 403)
+  const rows = await c.env.DB.prepare(`SELECT a.*, r.name as room_name, p.item_name FROM planner_advisories a
+    LEFT JOIN space_rooms r ON a.room_id=r.id LEFT JOIN space_placements p ON a.placement_id=p.id
+    WHERE a.created_by='supervisor' ORDER BY a.created_at DESC LIMIT 100`).all()
+  const content = (rows.results as any[]).map(a => `[${a.severity.toUpperCase()}] ${a.title}\n${a.advisory}\nScope: ${a.room_name || 'all rooms'}${a.item_name ? ` / ${a.item_name}` : ''}\nStatus: ${a.status}`).join('\n\n') || 'No supervisor advisories yet.'
+  const token = crypto.randomUUID()
+  const result = await c.env.DB.prepare('INSERT INTO reports (title, report_type, content, generated_by, share_token) VALUES (?,?,?,?,?)').bind(`Supervisor Space Advisory — ${new Date().toISOString().slice(0,10)}`, 'custom', content, 'supervisor', token).run()
+  return c.json({ ok: true, id: result.meta.last_row_id, content })
+})
+
+app.post('/api/supervisor/planner/validate', async (c) => {
+  if (!await requireRole(c, 'supervisor')) return c.json({ error: 'Supervisor access required' }, 403)
+  const b = await c.req.json(); const room: any = await c.env.DB.prepare('SELECT * FROM space_rooms WHERE id=?').bind(b.room_id).first()
+  if (!room) return c.json({ error: 'Room required' }, 400)
+  const placements: any[] = (await c.env.DB.prepare('SELECT * FROM space_placements WHERE room_id=?').bind(room.id).all()).results as any[]
+  const findings: any[] = []; const add = (title: string, category: string, severity: string, advisory: string, placementId?: number) => findings.push({ title, category, severity, advisory, placement_id: placementId })
+  for (const p of placements) {
+    const fp = Number(p.footprint_ft) || 0; const x = Number(p.x_ft) || 0; const y = Number(p.y_ft) || 0
+    if (x < 0 || y < 0 || x + fp > room.width_ft || y + fp > room.length_ft) add('Equipment exceeds room boundary', 'clearance', 'critical', `${p.item_name} extends beyond the room envelope. Reposition or confirm measured dimensions.`, p.id)
+    if (x < 1 || y < 1 || x + fp > room.width_ft - 1 || y + fp > room.length_ft - 1) add('Edge clearance requires review', 'safety', 'medium', `${p.item_name} is close to a wall/edge. Verify service access, egress, and manufacturer clearance.`, p.id)
+    if (['utility', 'printer', 'machinery'].includes(p.category) && !/exhaust|chimney|vent|power|circuit/i.test(p.notes || '')) add('Utility and exhaust requirements not documented', 'utilities', 'high', `${p.item_name} needs documented power, ventilation/chimney, heat, and maintenance access requirements before placement approval.`, p.id)
+    for (const q of placements) { if (q.id <= p.id) continue; const qfp = Number(q.footprint_ft) || 0; const qx = Number(q.x_ft) || 0; const qy = Number(q.y_ft) || 0; const overlap = x < qx + qfp && x + fp > qx && y < qy + qfp && y + fp > qy; if (overlap) add('Equipment footprints overlap', 'pathway', 'critical', `${p.item_name} overlaps ${q.item_name}. Resolve before installation.`, p.id) }
+  }
+  for (const f of findings) await c.env.DB.prepare(`INSERT INTO planner_advisories (room_id, placement_id, title, category, severity, advisory, source, status) VALUES (?,?,?,?,?,?,?,'draft')`).bind(room.id, f.placement_id || null, f.title, f.category, f.severity, f.advisory, 'planner_rules', 'draft').run()
+  await c.env.DB.prepare('INSERT INTO planner_snapshots (room_id, snapshot_json, created_by) VALUES (?,?,?)').bind(room.id, JSON.stringify({ room, placements, findings }), 'supervisor').run()
+  await audit(c, 'planner_validated', 'space_room', room.id, { finding_count: findings.length })
+  return c.json({ ok: true, findings, snapshot_created: true })
+})
+
+app.post('/api/supervisor/specs/extract', async (c) => {
+  if (!await requireRole(c, 'supervisor')) return c.json({ error: 'Supervisor access required' }, 403)
+  const b = await c.req.json(); if (!b.source_url) return c.json({ error: 'source_url required' }, 400)
+  const cfg: any = await c.env.DB.prepare('SELECT * FROM supervisor_llm_configs WHERE role=? AND is_enabled=1').bind('supervisor').first(); const apiToken = cfg?.token_ciphertext ? await decryptSecret(c, cfg.token_ciphertext) : cfg?.api_token
+  if (!apiToken) return c.json({ error: 'Configure the Supervisor LLM adapter first' }, 400)
+  let sourceText = b.source_url
+  try { const sourceResponse = await fetch(b.source_url); if (sourceResponse.ok && (sourceResponse.headers.get('content-type') || '').includes('text/html')) sourceText = (await sourceResponse.text()).replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 30000) } catch (_) {}
+  const prompt = `Extract product-spec facts from this source for facility planning. Return JSON only with: manufacturer, model, dimensions, footprint, weight, power, voltage, heat, exhaust_or_chimney, ventilation, noise, operating_clearance, maintenance_clearance, ergonomic_notes, source_limitations. Use null when unknown, never guess. Source URL: ${b.source_url}. Source content or reference: ${sourceText}`
+  try { const response = await fetch(`${String(cfg.base_url).replace(/\/$/, '')}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiToken}` }, body: JSON.stringify({ model: cfg.model, messages: [{ role: 'system', content: 'You extract cited, unverified product facts. Never certify safety or compliance.' }, { role: 'user', content: prompt }], max_tokens: Math.min(Number(cfg.token_budget) || 2000, 3000), temperature: 0 }) }); if (!response.ok) return c.json({ error: `LLM API error: ${response.status}` }, 502)
+    const data: any = await response.json(); const raw = (data.choices?.[0]?.message?.content || '{}').replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim(); const details = JSON.parse(raw)
+    if (b.placement_id) await c.env.DB.prepare(`INSERT OR REPLACE INTO placement_specs (placement_id, source_url, source_type, extracted_details, extraction_status, confidence) VALUES (?,?,?,?,?,?)`).bind(b.placement_id, b.source_url, b.source_type || 'url', JSON.stringify(details), 'extracted_unverified', 0.5).run()
+    await audit(c, 'specs_extracted', 'placement', Number(b.placement_id) || undefined, { source_url: b.source_url })
+    return c.json({ ok: true, details, confidence: 0.5, verification: 'unverified' })
+  } catch (e: any) { return c.json({ error: `Spec extraction failed: ${e.message}` }, 500) }
+})
+
+app.put('/api/supervisor/advisories/:id', async (c) => {
+  const session: any = await getSession(c); if (!session || !['supervisor', 'coe_leader'].includes(session.role)) return c.json({ error: 'Authorized role required' }, 403)
+  const b = await c.req.json(); const current: any = await c.env.DB.prepare('SELECT comments FROM planner_advisories WHERE id=?').bind(c.req.param('id')).first(); let comments = []
+  try { comments = JSON.parse(current?.comments || '[]') } catch (_) {}
+  if (b.comment) comments.push({ by: session.role, text: b.comment, at: new Date().toISOString() })
+  await c.env.DB.prepare(`UPDATE planner_advisories SET status=COALESCE(?,status), assignee=COALESCE(?,assignee), due_date=COALESCE(?,due_date), comments=?, action_evidence=COALESCE(?,action_evidence) WHERE id=?`).bind(b.status || null, b.assignee || null, b.due_date || null, JSON.stringify(comments), b.action_evidence || null, c.req.param('id')).run()
+  await audit(c, 'advisory_updated', 'planner_advisory', Number(c.req.param('id')), { status: b.status })
   return c.json({ ok: true })
 })
 

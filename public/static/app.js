@@ -8,6 +8,7 @@
 
   let state = {
     role: null,
+    session: null,
     passcode: null,
     activeView: 'dashboard',
     llmApiKey: null,
@@ -46,8 +47,10 @@
   let setupCache = { stages: [], sections: {}, items: {}, submissions: [] }
 
   const API = axios.create({ baseURL: '/api' })
+  API.interceptors.request.use(config => { if (state.session) config.headers['x-srm-session'] = state.session; return config })
   const $ = (s) => document.querySelector(s)
   const $$ = (s) => document.querySelectorAll(s)
+  const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]))
   const root = $('#app-root')
 
   // ── SAFE ANIMATION — never leaves elements invisible ────
@@ -142,6 +145,7 @@
         const { data } = await API.post('/auth', { passcode: code })
         if (data.ok) {
           state.role = data.role
+          state.session = data.session
           state.passcode = code
           renderApp()
         } else {
@@ -166,7 +170,8 @@
   // ── MAIN APP SHELL ───────────────────────────────────────
   function renderApp() {
     const isVenture = state.role === 'venture_owner'
-    const badgeClass = isVenture ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
+    const isSupervisor = state.role === 'supervisor'
+    const badgeClass = isVenture ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : isSupervisor ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30' : 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
 
     root.innerHTML = `
       <nav id="main-nav" class="glass-card sticky top-0 z-50 border-t-0 border-x-0 rounded-none">
@@ -177,7 +182,7 @@
             </div>
             <span class="font-bold text-base hidden sm:inline bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">SRM dROIds</span>
             <span class="text-xs px-2.5 py-1 rounded-full font-medium ${badgeClass}">
-              ${isVenture ? 'Venture Owner' : 'CoE Director'}
+              ${isVenture ? 'Venture Owner' : isSupervisor ? 'Supervisor' : 'CoE Leader'}
             </span>
           </div>
           <div class="flex items-center gap-1 sm:gap-2" id="nav-tabs"></div>
@@ -194,7 +199,13 @@
       <main id="main-content" class="max-w-7xl mx-auto px-4 sm:px-6 py-8"></main>`
 
     // Build nav tabs
-    const tabs = isVenture
+    const tabs = isSupervisor
+      ? [
+          { id: 'facility', icon: 'fa-cube', label: 'Space Planner' },
+          { id: 'supervisor-ai', icon: 'fa-shield-alt', label: 'AI Advisory' },
+          { id: 'reports', icon: 'fa-file-alt', label: 'Reports' }
+        ]
+      : isVenture
       ? [
           { id: 'dashboard', icon: 'fa-chart-pie', label: 'Dashboard' },
           { id: 'setup', icon: 'fa-layer-group', label: 'Setup Tracker' },
@@ -210,6 +221,7 @@
           { id: 'setup', icon: 'fa-layer-group', label: 'Setup Tracker' },
           { id: 'cohorts', icon: 'fa-users', label: 'Cohorts' },
           { id: 'facility', icon: 'fa-cube', label: 'Facility' },
+          { id: 'bulletins', icon: 'fa-bullhorn', label: 'AI Bulletins' },
           { id: 'reports', icon: 'fa-file-alt', label: 'Reports' },
           { id: 'roadmap', icon: 'fa-road', label: 'Roadmap' }
         ]
@@ -229,7 +241,7 @@
     })
 
     $('#logout-btn').addEventListener('click', () => {
-      state.role = null; state.passcode = null; state.activeView = 'dashboard'; renderLogin()
+      state.role = null; state.session = null; state.passcode = null; state.activeView = 'dashboard'; renderLogin()
     })
     $('#theme-toggle').addEventListener('click', toggleTheme)
     applyTheme()
@@ -258,6 +270,8 @@
       case 'procurement': renderProcurement(); break
       case 'partners': renderPartners(); break
       case 'llm': renderLLMView(); break
+      case 'supervisor-ai': renderSupervisorAIView(); break
+      case 'bulletins': renderBulletinsView(); break
       case 'admin': renderAdminView(); break
       default: renderDashboard()
     }
@@ -965,6 +979,12 @@
           <div><label class="text-xs text-slate-400">Y position (ft from top)</label><input name="y_ft" type="number" min="0" max="${room.length_ft}" step="0.5" required value="${p?.y_ft ?? 2}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
         </div>
         <div><label class="text-xs text-slate-400">Color</label><input name="color" type="color" value="${p?.color || SPACE_CATEGORY_COLORS[p?.category] || '#6366f1'}" class="w-full h-10 bg-slate-700 border border-slate-600 rounded-lg px-1 py-1 mt-1"></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="text-xs text-slate-400">Specs URL / PDF / image URL</label><input name="source_url" type="url" value="${p?.source_url || ''}" placeholder="https://…" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+          <div><label class="text-xs text-slate-400">Source type</label><select name="source_type" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"><option value="url">Product page</option><option value="pdf">PDF spec</option><option value="image">Image</option></select></div>
+        </div>
+        <p class="text-[11px] text-slate-500">The source is retained with this placement. The Supervisor AI can use it as reference context and marks extracted details as advisory until verified.</p>
+        ${state.role === 'supervisor' && p?.id ? '<button type="button" id="extract-specs" class="w-full text-xs px-3 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-300"><i class="fas fa-file-search mr-1"></i>Extract product details from source</button>' : ''}
         <div><label class="text-xs text-slate-400">Notes</label><textarea name="notes" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">${p?.notes || ''}</textarea></div>
         <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow">${p ? 'Save Placement' : 'Add to Layout'}</button>
       </form>`)
@@ -972,6 +992,7 @@
     const fpHint = () => { const f = Number(form.footprint_ft.value || 0); $('#fp-hint').textContent = `= ${f}×${f} ft · ${(f * f).toLocaleString()} sq ft of floor` }
     form.footprint_ft.addEventListener('input', fpHint); fpHint()
     form.category.addEventListener('change', () => { if (!p) form.color.value = SPACE_CATEGORY_COLORS[form.category.value] || '#6366f1' })
+    $('#extract-specs')?.addEventListener('click', async () => { const source = form.source_url.value.trim(); if (!source) return toast('Add a source URL first', 'error'); try { await API.post('/supervisor/specs/extract', { placement_id: p.id, source_url: source, source_type: form.source_type.value }); toast('Specs extracted and saved as unverified metadata', 'success'); closeModal(); renderSpacePlanner() } catch (e) { toast(e.response?.data?.error || e.message, 'error') } })
     form.addEventListener('submit', async (e) => {
       e.preventDefault()
       const fd = new FormData(form)
@@ -980,7 +1001,7 @@
       // clamp so the footprint stays inside the room
       x = Math.max(0, Math.min(room.width_ft - fp, x))
       y = Math.max(0, Math.min(room.length_ft - fp, y))
-      const payload = { room_id: room.id, item_name: fd.get('item_name'), category: fd.get('category'), status: fd.get('status'), footprint_ft: fp, height_ft: Number(fd.get('height_ft')), x_ft: x, y_ft: y, color: fd.get('color'), notes: fd.get('notes') }
+      const payload = { room_id: room.id, item_name: fd.get('item_name'), category: fd.get('category'), status: fd.get('status'), footprint_ft: fp, height_ft: Number(fd.get('height_ft')), x_ft: x, y_ft: y, color: fd.get('color'), notes: fd.get('notes'), source_url: fd.get('source_url'), source_type: fd.get('source_type') }
       if (p) { await API.put(`/space/placements/${p.id}`, payload); toast('Placement updated', 'success') }
       else { await API.post('/space/placements', payload); toast('Equipment placed in layout', 'success') }
       closeModal(); renderSpacePlanner()
@@ -1009,6 +1030,9 @@
     renderer.shadowMap.enabled = true
     renderer.shadowMap.type = THREE.PCFSoftShadowMap
     container.appendChild(renderer.domElement)
+    const hoverCard = document.createElement('div')
+    hoverCard.className = 'planner-hover-card hidden absolute z-20 pointer-events-none max-w-xs rounded-xl border border-cyan-400/30 bg-slate-950/95 p-3 text-xs shadow-2xl'
+    container.appendChild(hoverCard)
 
     scene.add(new THREE.AmbientLight(isDay ? 0xffffff : 0x8090b0, isDay ? 0.9 : 0.7))
     const dir = new THREE.DirectionalLight(0xffffff, isDay ? 1.6 : 1.2)
@@ -1106,8 +1130,15 @@
       raycaster.setFromCamera(mouse, camera)
       const hits = raycaster.intersectObjects(meshes)
       meshes.forEach(m => m.material.emissive.set(0x000000))
-      if (hits.length) { hits[0].object.material.emissive.set(0x333333); container.style.cursor = 'pointer' }
-      else container.style.cursor = 'grab'
+      if (hits.length) {
+        const p = hits[0].object.userData.placement
+        hits[0].object.material.emissive.set(0x333333); container.style.cursor = 'pointer'
+        let details = {}
+        try { details = JSON.parse(p.extracted_details || '{}') } catch (_) {}
+        const detailText = Object.entries(details).slice(0, 4).map(([k, v]) => `<div><span class="text-slate-500">${k}:</span> ${v}</div>`).join('')
+        hoverCard.innerHTML = `<div class="font-semibold text-cyan-300 mb-1">${p.item_name}</div><div class="text-slate-300">${p.notes || 'Review placement, operating envelope, and access requirements.'}</div>${p.source_url ? `<div class="mt-2 text-indigo-300 truncate">Source: ${p.source_url}</div>` : ''}${detailText ? `<div class="mt-2 border-t border-slate-800 pt-2 text-slate-400">${detailText}</div>` : ''}`
+        hoverCard.style.left = `${Math.min(e.clientX - rect.left + 14, W - 280)}px`; hoverCard.style.top = `${Math.min(e.clientY - rect.top + 14, H - 130)}px`; hoverCard.classList.remove('hidden')
+      } else { container.style.cursor = 'grab'; hoverCard.classList.add('hidden') }
     })
 
     // Orbit around room center + zoom
@@ -1557,6 +1588,23 @@
   }
 
   // ── LLM SYNTHESIS ────────────────────────────────────────
+  async function renderSupervisorAIView() {
+    const content = $('#main-content')
+    const [{ data: cfg }, { data: rooms }] = await Promise.all([API.get('/supervisor/llm/config'), API.get('/space/rooms')])
+    content.innerHTML = `<div class="space-y-6"><div class="flex items-start justify-between gap-3"><div><h2 class="text-xl font-bold">Supervisor AI Advisory</h2><p class="text-sm text-slate-400">Review the current plan through safety, operability, and human-workflow lenses. Outputs require qualified review.</p></div><button id="sup-report" class="text-xs px-3 py-2 rounded-lg bg-slate-700/60 border border-slate-700 text-slate-300"><i class="fas fa-file-export mr-1"></i>Generate report</button></div><div class="grid lg:grid-cols-[1fr_1.2fr] gap-5"><div class="glass-card rounded-2xl p-5 space-y-4"><div class="flex items-center justify-between"><h3 class="font-semibold"><i class="fas fa-route text-cyan-400 mr-2"></i>LLM adapter &amp; token router</h3><span class="text-[11px] text-cyan-300">Supervisor only</span></div><p class="text-xs text-slate-500">Settings persist for the Supervisor role. The token is never returned after save.</p><input id="sup-provider" value="${cfg.provider || 'openai'}" placeholder="Provider" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"><input id="sup-base-url" value="${cfg.base_url || ''}" placeholder="Base URL" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"><input id="sup-model" value="${cfg.model || ''}" placeholder="Model" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"><input id="sup-token" type="password" placeholder="Paste token to change (leave blank to keep current)" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"><div><label class="text-xs text-slate-400">Max output tokens</label><input id="sup-budget" type="number" min="256" max="16000" value="${cfg.token_budget || 2000}" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm mt-1 text-slate-100"></div><button id="sup-save" class="w-full bg-slate-700/60 hover:bg-slate-600 border border-slate-700 text-slate-200 py-2.5 rounded-xl text-sm">Save adapter settings</button></div><div class="glass-card rounded-2xl p-5 space-y-4"><h3 class="font-semibold"><i class="fas fa-search-plus text-indigo-400 mr-2"></i>Analyze a plan</h3><select id="sup-room" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"><option value="">All room context</option>${rooms.map(r => `<option value="${r.id}">${r.name} · ${r.campus}</option>`).join('')}</select><textarea id="sup-prompt" rows="4" placeholder="Ask about chimney/exhaust, pathways, ergonomics, clearance, power, fire access, or another concern…" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"></textarea><input id="sup-source" placeholder="Optional product specs URL, PDF, or image URL" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"><button id="sup-analyze" class="w-full bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white py-2.5 rounded-xl text-sm font-medium btn-glow"><i class="fas fa-robot mr-2"></i>Run supervisor review</button><div id="sup-results" class="space-y-3"></div></div></div></div>`
+    $('#sup-report').onclick = async () => { await API.post('/supervisor/advisories/report'); toast('Supervisor report generated. View it in Reports.', 'success') }
+    const validateButton = document.createElement('button'); validateButton.className = 'w-full text-xs px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300'; validateButton.innerHTML = '<i class="fas fa-ruler-combined mr-1"></i>Run placement & safety checks'; $('#sup-analyze').parentNode.insertBefore(validateButton, $('#sup-analyze')); validateButton.onclick = async () => { if (!$('#sup-room').value) return toast('Select a room first', 'error'); const { data } = await API.post('/supervisor/planner/validate', { room_id: $('#sup-room').value }); $('#sup-results').innerHTML = (data.findings || []).map(f => `<div class="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3"><div class="flex justify-between"><span class="font-medium text-sm">${f.title}</span><span class="text-[10px] uppercase text-amber-300">${f.severity}</span></div><p class="text-xs text-slate-300 mt-2">${f.advisory}</p></div>`).join('') || '<p class="text-sm text-emerald-400">No rule-based conflicts found. Verify against site measurements and manufacturer instructions.</p>'; toast(`${data.findings?.length || 0} planner findings recorded`, 'info') }
+    $('#sup-save').onclick = async () => { await API.put('/supervisor/llm/config', { provider: $('#sup-provider').value, base_url: $('#sup-base-url').value, model: $('#sup-model').value, api_token: $('#sup-token').value, token_budget: Number($('#sup-budget').value) }); toast('Supervisor adapter saved', 'success') }
+    $('#sup-analyze').onclick = async () => { const btn = $('#sup-analyze'); btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner animate-spin mr-2"></i>Reviewing…'; try { const { data } = await API.post('/supervisor/advisories/analyze', { room_id: $('#sup-room').value || null, prompt: $('#sup-prompt').value, source_material: $('#sup-source').value }); const results = $('#sup-results'); results.innerHTML = (data.advisories || []).map((a, i) => `<div class="rounded-xl border ${a.severity === 'critical' || a.severity === 'high' ? 'border-red-500/30 bg-red-500/5' : 'border-slate-700/70 bg-slate-800/40'} p-3"><div class="flex items-center justify-between"><span class="font-medium text-sm">${a.title}</span><span class="text-[10px] uppercase tracking-wider text-amber-300">${a.severity}</span></div><p class="text-xs text-slate-300 mt-2">${a.advisory}</p><button class="sup-push mt-3 text-xs px-3 py-1.5 rounded-lg bg-indigo-500/15 border border-indigo-500/30 text-indigo-300" data-id="${data.ids?.[i] || ''}">Push to CoE bulletin</button></div>`).join('') || '<p class="text-sm text-slate-500">No advisory returned.</p>'; $$('.sup-push').forEach(b => b.onclick = async () => { await API.post(`/supervisor/advisories/${b.dataset.id}/push`); b.textContent = 'Pushed to CoE bulletin'; b.disabled = true; toast('Advisory pushed to CoE leader', 'success') }) } catch (e) { toast(e.response?.data?.error || e.message, 'error') } btn.disabled = false; btn.innerHTML = '<i class="fas fa-robot mr-2"></i>Run supervisor review' }
+  }
+
+  async function renderBulletinsView() {
+    const content = $('#main-content'); const { data: bulletins } = await API.get('/supervisor/bulletins')
+    content.innerHTML = `<div class="space-y-6"><div><h2 class="text-xl font-bold">AI Bulletins</h2><p class="text-sm text-slate-400">Supervisor advisories pushed for CoE leader acknowledgement.</p></div><div class="space-y-3">${bulletins.length ? bulletins.map(a => `<div class="glass-card rounded-2xl p-5"><div class="flex items-start justify-between gap-3"><div><span class="text-[10px] uppercase tracking-wider text-amber-300">${a.severity} · ${a.category}</span><h3 class="font-semibold mt-1">${a.title}</h3><p class="text-sm text-slate-300 mt-2">${a.advisory}</p><p class="text-xs text-slate-500 mt-3">${a.room_name || 'All rooms'}${a.item_name ? ` · ${a.item_name}` : ''}</p></div><div class="text-right">${a.status === 'acknowledged' || a.status === 'actioned' ? '<span class="text-xs text-emerald-400"><i class="fas fa-check mr-1"></i>Acknowledged</span>' : `<button class="ack-bulletin text-xs px-3 py-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300" data-id="${a.id}">Acknowledge</button>`}</div></div></div>`).join('') : '<div class="glass-card rounded-2xl p-10 text-center text-slate-500">No pushed advisories yet.</div>'}</div></div>`
+    bulletins.forEach((a, i) => { const card = $$('.glass-card')[i]; if (!card) return; const controls = document.createElement('div'); controls.className = 'mt-4 pt-3 border-t border-slate-800 grid sm:grid-cols-3 gap-2'; controls.innerHTML = `<select class="bulletin-status bg-slate-800/60 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200"><option value="acknowledged">Acknowledged</option><option value="actioned">Actioned</option></select><input class="bulletin-assignee bg-slate-800/60 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200" placeholder="Action owner"><input class="bulletin-due bg-slate-800/60 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200" type="date"><input class="bulletin-comment sm:col-span-2 bg-slate-800/60 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200" placeholder="Add action note"><button class="bulletin-save text-xs rounded-lg bg-indigo-500/15 border border-indigo-500/30 text-indigo-300">Save action</button>`; card.appendChild(controls); controls.querySelector('.bulletin-save').onclick = async () => { await API.put(`/supervisor/advisories/${a.id}`, { status: controls.querySelector('.bulletin-status').value, assignee: controls.querySelector('.bulletin-assignee').value, due_date: controls.querySelector('.bulletin-due').value, comment: controls.querySelector('.bulletin-comment').value }); toast('Advisory lifecycle updated', 'success'); renderBulletinsView() } })
+    $$('.ack-bulletin').forEach(b => b.onclick = async () => { await API.put(`/supervisor/bulletins/${b.dataset.id}/acknowledge`, { acknowledged_by: 'coe_leader' }); toast('Bulletin acknowledged', 'success'); renderBulletinsView() })
+  }
+
   async function renderLLMView() {
     const content = $('#main-content')
     content.innerHTML = `
