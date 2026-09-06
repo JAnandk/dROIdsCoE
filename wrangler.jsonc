@@ -13,4 +13,8 @@
       "database_id": "srm-droids-coe-prod-id"
     }
   ]
+{
+  "name": "droidscoe",
+  "main": "src/index.ts"  // ← path to your Worker entry file
+}
 }
