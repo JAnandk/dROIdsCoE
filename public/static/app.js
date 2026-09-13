@@ -11,7 +11,6 @@
     session: null,
     passcode: null,
     activeView: 'dashboard',
-    llmApiKey: null,
     emailApiKey: null,
     charts: {},
     threeScene: null,
@@ -23,7 +22,8 @@
     campusScope: localStorage.getItem('srm_campus_scope') || 'both',
     campusLocked: localStorage.getItem('srm_campus_locked') === 'true',
     spaceRoomId: 0,
-    facilityMode: 'zones' // 'zones' (existing facility map) | 'planner' (sqft space planner)
+    facilityMode: 'zones', // 'zones' (existing facility map) | 'planner' (sqft space planner)
+    collabTab: 'board'
   }
 
   // ── DAY / NIGHT THEME ────────────────────────────────────
@@ -39,7 +39,7 @@
     localStorage.setItem('srm_theme', state.theme)
     applyTheme()
     // Re-render 3D views so scene colors follow the theme
-    if (state.activeView === 'facility') initThreeJS()
+    if (state.activeView === 'facility') renderFacilityView()
   }
   window._toggleTheme = toggleTheme
 
@@ -123,45 +123,132 @@
     renderLogin()
   }
 
-  // ── PREMIUM LOGIN SCREEN — passcodes hidden ──────────────
+  // ── LANDING / LOGIN — 3D drone-lifecycle showcase (v5) ───
+  const LANDING_PHASES = ['Raw Materials', 'Exploded View', 'Assembly', 'Flight Test', 'Swarm Ops', 'Command Center']
+  const LANDING_IMPACTS = [
+    { label: 'Precision Agriculture', img: 'https://sspark.genspark.ai/i/kmbmQ9YGKbWx2HXV?width=2560' },
+    { label: 'Mining Surveys', img: 'https://sspark.genspark.ai/i/0Io4w8zP8ahNIguE?width=2560' },
+    { label: 'Ocean & River Erosion Studies', img: 'https://sspark.genspark.ai/i/ZitMV8l18uhYZqr2?width=2560' },
+    { label: 'Forest Inventory', img: 'https://sspark.genspark.ai/i/NevnnepGnJlYbYrq?width=2560' },
+    { label: 'Geographical Mapping', img: null },
+    { label: 'Disaster Response', img: null }
+  ]
+
   function renderLogin() {
     root.innerHTML = `
-      <main class="mission-landing min-h-screen relative overflow-hidden">
-        <div id="landing-3d" class="landing-3d" aria-hidden="true"></div>
-        <div class="landing-noise" aria-hidden="true"></div>
-        <div class="max-w-7xl mx-auto min-h-screen grid lg:grid-cols-[1.15fr_0.85fr] gap-10 items-center p-6 sm:p-10 lg:p-16 relative z-10">
-          <section class="landing-copy">
-            <div class="eyebrow"><span class="eyebrow-dot"></span> Centre of Excellence / Mission Control</div>
-            <h1 class="landing-title">Build the next<br><span>airspace, together.</span></h1>
-            <p class="landing-lede">A live operating view for SRM dROIds — where people, platforms, facilities and decisions move in the same direction.</p>
-            <div class="landing-pills"><span><i class="fas fa-location-dot"></i> Ramapuram</span><span><i class="fas fa-location-dot"></i> Trichy</span><span><i class="fas fa-satellite-dish"></i> Live CoE system</span></div>
-            <div class="landing-stats"><div><strong>02</strong><span>campuses</span></div><div><strong>360°</strong><span>operational lens</span></div><div><strong>01</strong><span>shared mission</span></div></div>
-          </section>
-          <section class="login-panel-wrap relative z-20">
-            <div class="login-panel-kicker"><span class="pulse-dot"></span> Secure role access</div>
-
-          <form id="login-form" class="glass-card rounded-2xl p-8 space-y-5">
-            <div id="login-error" class="hidden bg-red-500/10 border border-red-500/30 rounded-xl p-3 text-red-400 text-sm flex items-center gap-2">
-              <i class="fas fa-exclamation-triangle"></i> <span></span>
-            </div>
+      <main class="min-h-screen flex items-center justify-center p-6 relative overflow-hidden">
+        <div id="hero-canvas-wrap"></div>
+        <div class="scan-line"></div>
+        <div class="absolute top-0 left-0 right-0 z-10 pointer-events-none">
+          <div class="max-w-7xl mx-auto px-6 pt-10 flex items-start justify-between gap-6">
             <div>
-              <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Access Passcode</label>
-              <div class="relative">
-                <i class="fas fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"></i>
-                <input id="passcode-input" type="password" placeholder="Enter your secure passcode..."
-                  class="w-full bg-slate-800/80 border border-slate-700 rounded-xl pl-10 pr-4 py-3.5 text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition text-sm" autofocus>
+              <div class="flex items-center gap-2 mb-2">
+                <span class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                <span class="text-[10px] tracking-[0.3em] uppercase text-cyan-400/80 font-semibold">Deep-Tech Mission Control</span>
+              </div>
+              <h1 class="text-4xl sm:text-5xl font-extrabold tracking-tight leading-none">
+                <span class="bg-gradient-to-r from-indigo-400 via-purple-400 to-cyan-400 bg-clip-text text-transparent glow-text">SRM dROIds</span>
+              </h1>
+              <p class="text-slate-400 mt-2 text-xs sm:text-sm">Dual-Campus Drone Centre of Excellence — from blueprint to real-world impact</p>
+              <div id="landing-phase-chip" class="hud-chip rounded-xl px-4 py-2 flex items-center gap-3 mt-4 w-fit max-w-[260px]">
+                <i class="fas fa-drafting-compass text-indigo-400"></i>
+                <div class="flex-1">
+                  <div class="text-[10px] uppercase tracking-widest text-slate-500">Build Lifecycle</div>
+                  <div id="landing-phase-name" class="text-sm font-bold text-slate-100">Raw Materials</div>
+                </div>
+                <div id="landing-phase-idx" class="text-[10px] text-slate-500 font-mono">01/06</div>
               </div>
             </div>
-            <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold py-3.5 px-6 rounded-xl transition btn-glow flex items-center justify-center gap-2 text-sm">
-              <i class="fas fa-rocket"></i> Enter Mission Control
-            </button>
-          </form>
-          <p class="text-center text-xs text-slate-500 mt-4">Your role determines the tools, data and actions available in Mission Control.</p>
-          </section>
+            <div class="hidden md:flex flex-col items-end gap-3">
+              <div class="flex items-center gap-2 text-[10px] text-slate-500">
+                <span class="hud-chip rounded-lg px-2.5 py-1.5"><i class="fas fa-map-marker-alt text-indigo-400 mr-1"></i>Ramapuram</span>
+                <span class="hud-chip rounded-lg px-2.5 py-1.5"><i class="fas fa-map-marker-alt text-cyan-400 mr-1"></i>Trichy</span>
+              </div>
+              <div class="w-56 hud-chip rounded-2xl p-3 shadow-xl">
+                <div class="text-[9px] uppercase tracking-[0.25em] text-slate-500 mb-2 flex items-center gap-1.5">
+                  <i class="fas fa-earth-asia text-cyan-400"></i> Field Impact
+                </div>
+                <div class="relative h-28 rounded-xl overflow-hidden bg-slate-900/60 border border-slate-700/40">
+                  <img id="impact-img" src="${LANDING_IMPACTS[0].img}" alt="${LANDING_IMPACTS[0].label}" class="w-full h-full object-cover" style="transition:opacity .3s">
+                  <div id="impact-fallback" class="hidden absolute inset-0 items-center justify-center bg-gradient-to-br from-indigo-900/70 to-cyan-900/50" style="transition:opacity .3s"><i class="fas fa-satellite text-cyan-400/70 text-2xl"></i></div>
+                </div>
+                <div id="impact-ticker" class="text-xs text-cyan-300 font-medium mt-2 leading-snug" style="transition:opacity .3s">${LANDING_IMPACTS[0].label}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Collapsed login console — docked right edge, hero stays fully visible -->
+        <button id="login-launcher" class="fixed right-0 top-1/2 -translate-y-1/2 z-30 hud-chip border-r-0 rounded-l-2xl pl-3 pr-4 py-5 flex flex-col items-center gap-2 hover:pl-5 transition-all duration-300 group" title="Open login console">
+          <i class="fas fa-user-astronaut text-cyan-400 text-lg group-hover:scale-110 transition-transform"></i>
+          <span class="text-[10px] font-bold tracking-[0.2em] text-slate-300" style="writing-mode:vertical-rl;">LOGIN</span>
+          <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+        </button>
+
+        <!-- Slide-out login console panel -->
+        <aside id="login-console" class="fixed right-0 top-0 bottom-0 z-40 w-full max-w-[340px] translate-x-full pointer-events-none transition-transform duration-300 ease-out">
+          <div class="h-full glass-card border-r-0 rounded-none rounded-l-3xl p-6 sm:p-8 flex flex-col justify-center shadow-2xl">
+            <div class="flex items-center justify-between mb-6">
+              <div>
+                <div class="text-[10px] uppercase tracking-[0.25em] text-cyan-400/80 font-semibold mb-1">Mission Console</div>
+                <h2 class="text-lg font-bold text-slate-100">Operator Login</h2>
+              </div>
+              <button id="login-console-close" class="text-slate-500 hover:text-slate-200 w-8 h-8 rounded-lg hover:bg-slate-800/60 transition flex items-center justify-center" title="Close console">
+                <i class="fas fa-times"></i>
+              </button>
+            </div>
+            <form id="login-form" class="space-y-5">
+              <div id="login-error" class="hidden bg-red-500/10 border border-red-500/30 rounded-xl p-3 text-red-400 text-sm flex items-center gap-2">
+                <i class="fas fa-exclamation-triangle"></i> <span></span>
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Access Passcode</label>
+                <div class="relative">
+                  <i class="fas fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"></i>
+                  <input id="passcode-input" type="password" placeholder="Enter your secure passcode..."
+                    class="w-full bg-slate-800/80 border border-slate-700 rounded-xl pl-10 pr-4 py-3.5 text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition text-sm">
+                </div>
+              </div>
+              <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold py-3.5 px-6 rounded-xl transition btn-glow flex items-center justify-center gap-2 text-sm">
+                <i class="fas fa-rocket"></i> Enter Mission Control
+              </button>
+              <p class="text-center text-[11px] text-slate-500">Role-based access — Director / Venture / Supervisor</p>
+            </form>
+          </div>
+        </aside>
+
+        <div class="absolute bottom-0 left-0 right-0 z-10 pointer-events-none pb-6">
+          <div class="max-w-7xl mx-auto px-6">
+            <div class="flex items-center gap-1.5 justify-center flex-wrap">
+              ${LANDING_PHASES.map((p, i) => `<span class="phase-chip hud-chip rounded-lg px-3 py-1.5 text-[11px] font-medium text-slate-400" data-phase="${i}">${p}</span>`).join('')}
+            </div>
+          </div>
         </div>
       </main>`
 
-    initLanding3D()
+    initLandingScene()
+    startLandingTicker()
+
+    // Side console: launcher opens, close button / Esc closes
+    const consolePanel = $('#login-console')
+    const launcher = $('#login-launcher')
+    const openConsole = () => {
+      consolePanel.classList.remove('translate-x-full')
+      consolePanel.classList.remove('pointer-events-none')
+      launcher.style.opacity = '0'
+      launcher.style.pointerEvents = 'none'
+      setTimeout(() => $('#passcode-input')?.focus(), 320)
+    }
+    const closeConsole = () => {
+      consolePanel.classList.add('translate-x-full')
+      consolePanel.classList.add('pointer-events-none')
+      launcher.style.opacity = '1'
+      launcher.style.pointerEvents = ''
+    }
+    launcher.addEventListener('click', openConsole)
+    $('#login-console-close').addEventListener('click', closeConsole)
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !consolePanel.classList.contains('translate-x-full')) closeConsole() })
+    // Console stays collapsed until the user opens it — the hero animation stays fully visible
 
     $('#login-form').addEventListener('submit', async (e) => {
       e.preventDefault()
@@ -182,15 +269,290 @@
       }
     })
 
-    animateIn('.landing-copy', { y: 18, opacity: 0, duration: 0.65, ease: 'power2.out' })
-    animateIn('#login-form', { y: 20, opacity: 0, duration: 0.5, delay: 0.15, ease: 'power2.out' })
+    animateIn('#login-form', { y: 20, opacity: 0, duration: 0.5, delay: 0.2 })
+    animateIn('#landing-phase-chip', { x: -20, opacity: 0, duration: 0.5 })
+    animateIn('.phase-chip', { y: 16, opacity: 0, duration: 0.4, stagger: 0.05, delay: 0.3 })
   }
+
+  // ── LANDING 3D SCENE — drone assembling from blueprint ───
+  let landingTimer = null
+  function startLandingTicker() {
+    let i = 0
+    if (landingTimer) clearInterval(landingTimer)
+    landingTimer = setInterval(() => {
+      const el = document.getElementById('impact-ticker')
+      if (!el) { clearInterval(landingTimer); return }
+      i = (i + 1) % LANDING_IMPACTS.length
+      const item = LANDING_IMPACTS[i]
+      el.style.opacity = '0'
+      const img = document.getElementById('impact-img')
+      const fb = document.getElementById('impact-fallback')
+      if (img) img.style.opacity = '0'
+      if (fb) fb.style.opacity = '0'
+      setTimeout(() => {
+        const t = document.getElementById('impact-ticker')
+        if (!t) return
+        t.textContent = item.label
+        t.style.opacity = '1'
+        const im = document.getElementById('impact-img')
+        const fl = document.getElementById('impact-fallback')
+        if (item.img && im) {
+          im.src = item.img
+          im.style.display = ''
+          im.style.opacity = '1'
+          if (fl) { fl.classList.add('hidden'); fl.classList.remove('flex') }
+        } else if (im && fl) {
+          im.style.display = 'none'
+          fl.classList.remove('hidden')
+          fl.classList.add('flex')
+          fl.style.opacity = '1'
+        }
+      }, 300)
+    }, 2600)
+  }
+
+  function initLandingScene() {
+    const wrap = document.getElementById('hero-canvas-wrap')
+    if (!wrap || !window.THREE) return
+    const W = wrap.clientWidth, H = wrap.clientHeight
+    const scene = new THREE.Scene()
+    scene.background = new THREE.Color(0x060a14)
+    scene.fog = new THREE.Fog(0x060a14, 40, 110)
+    const camera = new THREE.PerspectiveCamera(46, W / H, 0.1, 220)
+    const renderer = new THREE.WebGLRenderer({ antialias: true })
+    renderer.setSize(W, H)
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+    wrap.appendChild(renderer.domElement)
+
+    scene.add(new THREE.AmbientLight(0x4c5a8a, 1.2))
+    const key = new THREE.DirectionalLight(0x88aaff, 2.0); key.position.set(10, 16, 8); scene.add(key)
+    const rim = new THREE.PointLight(0x22d3ee, 50, 90); rim.position.set(-12, 8, -10); scene.add(rim)
+    const warm = new THREE.PointLight(0xf59e0b, 30, 60); warm.position.set(12, 5, 10); scene.add(warm)
+
+    // Blueprint floor grid + outer glow rings
+    scene.add(new THREE.GridHelper(72, 72, 0x1d2a4d, 0x0e1730))
+    for (let r = 6; r <= 30; r += 8) {
+      const ring = new THREE.Mesh(new THREE.RingGeometry(r, r + 0.12, 72),
+        new THREE.MeshBasicMaterial({ color: 0x6366f1, transparent: true, opacity: 0.14, side: THREE.DoubleSide }))
+      ring.rotation.x = -Math.PI / 2; ring.position.y = 0.02; scene.add(ring)
+    }
+
+    // Ambient particles
+    const pGeo = new THREE.BufferGeometry()
+    const pCount = 300, pArr = new Float32Array(pCount * 3)
+    for (let i = 0; i < pCount; i++) { pArr[i * 3] = (Math.random() - 0.5) * 80; pArr[i * 3 + 1] = Math.random() * 30; pArr[i * 3 + 2] = (Math.random() - 0.5) * 80 }
+    pGeo.setAttribute('position', new THREE.BufferAttribute(pArr, 3))
+    const particles = new THREE.Points(pGeo, new THREE.PointsMaterial({ color: 0x6366f1, size: 0.09, transparent: true, opacity: 0.5 }))
+    scene.add(particles)
+
+    // ── Drone parts with 3 pose targets: raw / exploded / assembled ──
+    const drone = new THREE.Group(); scene.add(drone)
+    const parts = []
+    const carbon = 0x1f2430, accent = 0x6366f1, metal = 0x8b93a8, rawWood = 0x8a6a3f, rawSpool = 0x64748b
+    function addPart(geo, color, assembled, exploded, raw, ry = 0) {
+      const g = new THREE.Group()
+      const solid = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.6, transparent: true, opacity: 0 }))
+      if (ry) solid.rotation.y = ry
+      const wire = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.9 }))
+      if (ry) wire.rotation.y = ry
+      // raw-material proxy: crate/spool shown only in phase 0
+      const rawMesh = new THREE.Mesh(
+        Math.random() > 0.5 ? new THREE.BoxGeometry(1.1, 0.8, 0.9) : new THREE.CylinderGeometry(0.45, 0.45, 0.9, 12),
+        new THREE.MeshStandardMaterial({ color: Math.random() > 0.5 ? rawWood : rawSpool, roughness: 0.85, metalness: 0.1, transparent: true, opacity: 1 }))
+      g.add(solid); g.add(wire); g.add(rawMesh)
+      g.position.copy(raw)
+      g.userData = { assembled, exploded, raw, solid, wire, rawMesh, spin: false }
+      drone.add(g); parts.push(g)
+      return g
+    }
+    const A = (x, y, z) => new THREE.Vector3(x, y, z)
+    const scatterRaw = (i) => A(Math.cos(i * 1.26) * (9 + (i % 3) * 2.2), 0.5, Math.sin(i * 1.26) * (9 + (i % 3) * 2.2))
+    const explodedSpread = (x, y, z, i) => A(x * 1.9, y + 1.2 + (i % 4) * 0.9, z * 1.9)
+
+    const defs = [
+      [new THREE.BoxGeometry(6, 0.22, 0.5), carbon, A(0, 2, 0), Math.PI / 4],
+      [new THREE.BoxGeometry(6, 0.22, 0.5), carbon, A(0, 2, 0), -Math.PI / 4],
+      [new THREE.BoxGeometry(1.7, 0.75, 1.7), accent, A(0, 2.45, 0), 0],
+      [new THREE.CylinderGeometry(0.26, 0.3, 0.55, 14), metal, A(1.9, 2.25, 1.9), 0],
+      [new THREE.CylinderGeometry(0.26, 0.3, 0.55, 14), metal, A(1.9, 2.25, -1.9), 0],
+      [new THREE.CylinderGeometry(0.26, 0.3, 0.55, 14), metal, A(-1.9, 2.25, 1.9), 0],
+      [new THREE.CylinderGeometry(0.26, 0.3, 0.55, 14), metal, A(-1.9, 2.25, -1.9), 0],
+      [new THREE.BoxGeometry(2.3, 0.045, 0.2), 0x22d3ee, A(1.9, 2.62, 1.9), 0],
+      [new THREE.BoxGeometry(2.3, 0.045, 0.2), 0x22d3ee, A(1.9, 2.62, -1.9), 0],
+      [new THREE.BoxGeometry(2.3, 0.045, 0.2), 0x22d3ee, A(-1.9, 2.62, 1.9), 0],
+      [new THREE.BoxGeometry(2.3, 0.045, 0.2), 0x22d3ee, A(-1.9, 2.62, -1.9), 0],
+      [new THREE.SphereGeometry(0.36, 16, 12), 0x0ea5e9, A(0, 1.6, 0.55), 0],
+      [new THREE.BoxGeometry(1.05, 0.42, 1.45), 0xf59e0b, A(0, 3.02, 0), 0],
+      [new THREE.BoxGeometry(0.12, 0.7, 1.9), metal, A(0.62, 1.35, 0), 0],
+      [new THREE.BoxGeometry(0.12, 0.7, 1.9), metal, A(-0.62, 1.35, 0), 0]
+    ]
+    const props = []
+    defs.forEach(([geo, color, asm, ry], i) => {
+      const p = addPart(geo, color, asm, explodedSpread(asm.x, asm.y, asm.z, i), scatterRaw(i), ry)
+      if (i >= 7 && i <= 10) { p.userData.spin = true; props.push(p) }
+    })
+
+    // Exploded-view connector lines (shown during phase 1)
+    const connMat = new THREE.LineDashedMaterial({ color: 0x22d3ee, transparent: true, opacity: 0, dashSize: 0.35, gapSize: 0.22 })
+    const connectors = parts.map(p => {
+      const geo = new THREE.BufferGeometry().setFromPoints([A(0, 0, 0), A(0, 0, 0)])
+      const line = new THREE.Line(geo, connMat)
+      line.computeLineDistances()
+      scene.add(line)
+      return { line, part: p }
+    })
+
+    // ── Swarm (5 mini drones) — hidden until phase 4 ──
+    const swarm = new THREE.Group(); scene.add(swarm)
+    const swarmDrones = []
+    for (let i = 0; i < 5; i++) {
+      const d = new THREE.Group()
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.3, 0.8), new THREE.MeshStandardMaterial({ color: accent, roughness: 0.4, metalness: 0.5 }))
+      const pr = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.05, 0.12), new THREE.MeshBasicMaterial({ color: 0x22d3ee }))
+      const pr2 = pr.clone(); pr2.rotation.y = Math.PI / 2
+      pr.position.y = 0.22; pr2.position.y = 0.22
+      d.add(body); d.add(pr); d.add(pr2)
+      d.visible = false
+      swarm.add(d)
+      swarmDrones.push({ g: d, props: [pr, pr2], phaseOff: i * 1.26 })
+    }
+
+    // ── Command center (consoles + trainees) — hidden until phase 5 ──
+    const commandCenter = new THREE.Group(); scene.add(commandCenter)
+    commandCenter.position.set(0, 0, -14)
+    const consoles = []
+    for (let i = -1; i <= 1; i++) {
+      const desk = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.0, 1.1), new THREE.MeshStandardMaterial({ color: 0x2a3550, roughness: 0.5, metalness: 0.4 }))
+      desk.position.set(i * 4.2, 0.5, 0)
+      const screen = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 1.1), new THREE.MeshBasicMaterial({ color: 0x0ea5e9, transparent: true, opacity: 0.9 }))
+      screen.position.set(i * 4.2, 1.85, -0.35)
+      // trainee: body + head
+      const bodyT = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.42, 1.05, 10), new THREE.MeshStandardMaterial({ color: 0x6366f1, roughness: 0.7 }))
+      bodyT.position.set(i * 4.2, 1.15, 1.35)
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 10), new THREE.MeshStandardMaterial({ color: 0xd9b08c, roughness: 0.8 }))
+      head.position.set(i * 4.2, 1.95, 1.35)
+      commandCenter.add(desk); commandCenter.add(screen); commandCenter.add(bodyT); commandCenter.add(head)
+      consoles.push(screen)
+    }
+    const ccWall = new THREE.Mesh(new THREE.PlaneGeometry(13.5, 4.6), new THREE.MeshBasicMaterial({ color: 0x101a33, transparent: true, opacity: 0.85, side: THREE.DoubleSide }))
+    ccWall.position.set(0, 2.4, -0.9)
+    commandCenter.add(ccWall)
+    const ccTitle = new THREE.Mesh(new THREE.PlaneGeometry(9, 0.9), new THREE.MeshBasicMaterial({ color: 0x6366f1, transparent: true, opacity: 0.65, side: THREE.DoubleSide }))
+    ccTitle.position.set(0, 4.3, -0.85)
+    commandCenter.add(ccTitle)
+    commandCenter.visible = false
+
+    // ── Phase machine ──
+    // 0 Raw Materials | 1 Exploded View | 2 Assembly | 3 Flight Test | 4 Swarm Ops | 5 Command Center
+    let phase = 0, phaseClock = 0
+    const PHASE_SECS = 4.2
+    const ease = (k) => 1 - Math.pow(1 - k, 3)
+
+    function syncPhaseDom() {
+      const name = document.getElementById('landing-phase-name')
+      const idx = document.getElementById('landing-phase-idx')
+      if (name) name.textContent = LANDING_PHASES[phase]
+      if (idx) idx.textContent = String(phase + 1).padStart(2, '0') + '/06'
+      document.querySelectorAll('.phase-chip').forEach(c => {
+        const active = Number(c.dataset.phase) === phase
+        c.classList.toggle('text-cyan-300', active)
+        c.classList.toggle('border-cyan-400/60', active)
+        c.classList.toggle('text-slate-400', !active)
+      })
+    }
+    syncPhaseDom()
+
+    const clock = new THREE.Clock()
+    let camAngle = 0.7
+    const vTmp = new THREE.Vector3()
+
+    function animate() {
+      if (!document.body.contains(renderer.domElement)) { renderer.dispose(); return }
+      requestAnimationFrame(animate)
+      const dt = Math.min(clock.getDelta(), 0.05)
+      const t = clock.elapsedTime
+      phaseClock += dt
+      if (phaseClock > PHASE_SECS) { phaseClock = 0; phase = (phase + 1) % 6; syncPhaseDom() }
+      const k = ease(Math.min(1, phaseClock / 1.1)) * 0.085 + 0.018
+
+      parts.forEach((p, i) => {
+        const u = p.userData
+        let goal = u.raw
+        if (phase === 1) goal = u.exploded
+        else if (phase >= 2) goal = u.assembled
+        p.position.lerp(goal, k)
+        if (phase === 0) { p.position.y = u.raw.y + Math.sin(t * 1.2 + i) * 0.05; p.rotation.y += 0.004 }
+        if (phase === 1) p.rotation.y += 0.006
+        if (phase >= 2) p.rotation.y *= 0.94
+        // material visibility: raw crate -> wireframe -> solid
+        const rawOp = phase === 0 ? 1 : 0
+        const wireOp = phase === 1 ? 0.95 : (phase === 0 ? 0.25 : 0.06)
+        const solidOp = phase >= 2 ? 1 : 0.03
+        u.rawMesh.material.opacity += (rawOp - u.rawMesh.material.opacity) * 0.09
+        u.wire.material.opacity += (wireOp - u.wire.material.opacity) * 0.09
+        u.solid.material.opacity += (solidOp - u.solid.material.opacity) * 0.09
+        if (u.spin) p.rotation.y += phase >= 3 ? 0.6 : 0.02
+      })
+
+      // dashed connectors during exploded view
+      connMat.opacity += ((phase === 1 ? 0.55 : 0) - connMat.opacity) * 0.1
+      if (connMat.opacity > 0.02) connectors.forEach(({ line, part }) => {
+        line.geometry.setFromPoints([part.position.clone(), part.userData.assembled.clone()])
+        line.computeLineDistances()
+      })
+
+      // drone group motion per phase
+      if (phase === 3) { drone.position.set(0, 1.3 + Math.sin(t * 2.4) * 0.45, 0); drone.rotation.y = Math.sin(t * 0.7) * 0.2 }
+      else if (phase === 4) { const a = t * 0.5; drone.position.set(Math.cos(a) * 6.5, 4.6, Math.sin(a) * 6.5); drone.rotation.y = -a }
+      else if (phase === 5) { const a = t * 0.32; drone.position.set(Math.cos(a) * 5, 6.2, Math.sin(a) * 5); drone.rotation.y = -a }
+      else { drone.position.lerp(vTmp.set(0, 0, 0), 0.06); drone.rotation.y *= 0.95 }
+
+      // swarm formation flight (phase 4+)
+      swarmDrones.forEach((s, i) => {
+        s.g.visible = phase >= 4
+        if (!s.g.visible) return
+        const a = t * 0.5 + s.phaseOff
+        const radius = 6.5 + Math.sin(t + i) * 0.4
+        const tx = Math.cos(a) * radius, tz = Math.sin(a) * radius
+        const ty = 4.6 + Math.sin(t * 1.6 + s.phaseOff) * 0.35 + (i - 2) * 0.28
+        s.g.position.lerp(vTmp.set(tx, ty, tz), 0.12)
+        s.g.rotation.y = -a
+        s.props.forEach(pr => pr.rotation.y += 0.7)
+      })
+
+      // command center reveal (phase 5)
+      commandCenter.visible = phase === 5
+      if (commandCenter.visible) {
+        commandCenter.scale.y += (1 - commandCenter.scale.y) * 0.07
+        commandCenter.position.y = -0.01
+        consoles.forEach((s, i) => { s.material.opacity = 0.65 + Math.sin(t * 3 + i * 2) * 0.3 })
+      } else commandCenter.scale.y = 0.01
+
+      // camera: slow orbit, slightly higher during swarm/command phases
+      camAngle += dt * (phase === 4 ? 0.2 : 0.1)
+      const camR = phase >= 4 ? 19 : 15.5
+      const camY = phase === 5 ? 9.5 : phase === 4 ? 9 : 7.5
+      const lookZ = phase === 5 ? -5 : 0
+      camera.position.set(Math.cos(camAngle) * camR, camY + Math.sin(t * 0.3) * 0.4, Math.sin(camAngle) * camR + lookZ)
+      camera.lookAt(0, 2.8, lookZ)
+      particles.rotation.y = t * 0.01
+      renderer.render(scene, camera)
+    }
+    animate()
+
+    window.addEventListener('resize', () => {
+      if (!document.body.contains(renderer.domElement)) return
+      const w2 = wrap.clientWidth, h2 = wrap.clientHeight
+      camera.aspect = w2 / h2; camera.updateProjectionMatrix(); renderer.setSize(w2, h2)
+    })
+  }
+
 
   function showLoginError(msg) {
     const el = $('#login-error')
     el.querySelector('span').textContent = msg
     el.classList.remove('hidden')
-    if (window.gsap) gsap.from(el, { x: -10, opacity: 0, duration: 0.3 })
+    animateIn(el, { x: -10, opacity: 0, duration: 0.3 })
   }
 
   // ── MAIN APP SHELL ───────────────────────────────────────
@@ -238,17 +600,18 @@
           { id: 'dashboard', icon: 'fa-chart-pie', label: 'Overview' },
           { id: 'facility', icon: 'fa-building', label: 'Facility' },
           { id: 'supervisor-ai', icon: 'fa-shield-alt', label: 'AI Advisory' },
-          { id: 'bulletins', icon: 'fa-bullhorn', label: 'Bulletins' },
-          { id: 'reports', icon: 'fa-file-alt', label: 'Reports' }
+          { id: 'bulletins', icon: 'fa-bullhorn', label: 'Bulletins' }
         ]
       : isVenture
       ? [
           { id: 'dashboard', icon: 'fa-chart-pie', label: 'Dashboard' },
-          { id: 'setup', icon: 'fa-layer-group', label: 'Setup Tracker' },
+          { id: 'setup', icon: 'fa-layer-group', label: 'Setup' },
+          { id: 'facility', icon: 'fa-cube', label: 'Facility' },
+          { id: 'creator', icon: 'fa-file-signature', label: 'Report Creator' },
+          { id: 'collab', icon: 'fa-object-group', label: 'Collab' },
           { id: 'review', icon: 'fa-clipboard-check', label: 'Review' },
-          { id: 'procurement', icon: 'fa-truck', label: 'Procurement' },
+          { id: 'procurement', icon: 'fa-truck', label: 'Procure' },
           { id: 'partners', icon: 'fa-handshake', label: 'Partners' },
-          { id: 'reports', icon: 'fa-file-alt', label: 'Reports' },
           { id: 'llm', icon: 'fa-robot', label: 'GenAI' },
           { id: 'admin', icon: 'fa-cog', label: 'Admin' }
         ]
@@ -258,15 +621,18 @@
           { id: 'cohorts', icon: 'fa-users', label: 'Cohorts' },
           { id: 'facility', icon: 'fa-cube', label: 'Facility' },
           { id: 'bulletins', icon: 'fa-bullhorn', label: 'AI Bulletins' },
-          { id: 'reports', icon: 'fa-file-alt', label: 'Reports' },
+          { id: 'collab', icon: 'fa-object-group', label: 'Collab' },
           { id: 'roadmap', icon: 'fa-road', label: 'Roadmap' }
         ]
 
     const navTabs = $('#nav-tabs')
+    // Labels only when few tabs fit comfortably (supervisor); otherwise icon-only + tooltip
+    const showLabels = tabs.length <= 6
     tabs.forEach(t => {
       const btn = document.createElement('button')
-      btn.className = `nav-tab px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200 ${t.id === state.activeView ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'}`
-      btn.innerHTML = `<i class="fas ${t.icon} mr-1.5"></i> <span class="hidden sm:inline">${t.label}</span>`
+      btn.className = `nav-tab shrink-0 ${showLabels ? 'px-3' : 'px-2.5'} py-2 rounded-xl text-sm font-medium transition-all duration-200 whitespace-nowrap ${t.id === state.activeView ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'}`
+      btn.title = t.label
+      btn.innerHTML = `<i class="fas ${t.icon}"></i>${showLabels ? `<span class="hidden sm:inline ml-1.5">${t.label}</span>` : ''}`
       btn.dataset.view = t.id
       navTabs.appendChild(btn)
     })
@@ -292,7 +658,7 @@
   function navigateView() {
     $$('.nav-tab').forEach(b => {
       const isActive = b.dataset.view === state.activeView
-      b.className = `nav-tab px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200 ${isActive ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'}`
+      b.className = `nav-tab shrink-0 px-2.5 py-2 rounded-xl text-sm font-medium transition-all duration-200 whitespace-nowrap ${isActive ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'}`
     })
 
     const content = $('#main-content')
@@ -301,10 +667,11 @@
     switch (state.activeView) {
       case 'dashboard': renderDashboard(); break
       case 'setup': renderSetupTracker(); break
+      case 'collab': renderCollabView(); break
+      case 'creator': renderReportCreator(); break
       case 'review': renderReviewView(); break
       case 'cohorts': renderCohorts(); break
       case 'facility': renderFacilityView(); break
-      case 'reports': renderReportsView(); break
       case 'roadmap': renderRoadmap(); break
       case 'procurement': renderProcurement(); break
       case 'partners': renderPartners(); break
@@ -719,7 +1086,7 @@
         })
       })
 
-      gsap.from('#review-list > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.06 })
+      animateIn('#review-list > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.06 })
     } catch (e) {
       content.innerHTML = errorHtml('review', e)
     }
@@ -774,7 +1141,7 @@
 
       $('#add-cohort-btn').addEventListener('click', () => openCohortForm())
 
-      gsap.from('#stage-columns > div', { y: 40, opacity: 0, duration: 0.6, stagger: 0.1 })
+      animateIn('#stage-columns > div', { y: 40, opacity: 0, duration: 0.6, stagger: 0.1 })
     } catch (e) {
       content.innerHTML = errorHtml('cohorts', e)
     }
@@ -892,7 +1259,10 @@
               <button id="space-add-room" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-3 py-2 rounded-xl text-sm transition"><i class="fas fa-plus mr-1"></i>Room</button>
               ${room ? `<button id="space-edit-room" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-3 py-2 rounded-xl text-sm transition"><i class="fas fa-cog mr-1"></i>Configure</button>` : ''}
             </div>
-            ${room ? `<button id="space-add-placement" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition btn-glow"><i class="fas fa-plus mr-1"></i>Place Equipment</button>` : ''}
+            ${room ? `<div class="flex gap-2">
+              <button id="space-analyze" class="bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/40 text-cyan-300 px-4 py-2 rounded-xl text-sm font-medium transition"><i class="fas fa-brain mr-1"></i>Analyze Layout</button>
+              <button id="space-add-placement" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition btn-glow"><i class="fas fa-plus mr-1"></i>Place Equipment</button>
+            </div>` : ''}
           </div>
 
           ${room ? `
@@ -903,7 +1273,7 @@
             <div class="glass-card rounded-xl p-4"><div class="text-xs text-slate-500 mb-1">Floor Utilization</div><div class="w-full bg-slate-700/50 rounded-full h-2.5 mt-2"><div class="h-2.5 rounded-full bg-gradient-to-r from-indigo-500 to-cyan-400" style="width:${pctUsed}%"></div></div><div class="text-xs text-slate-400 mt-1.5">${pctUsed}% used</div></div>
           </div>
           <div id="space-3d" class="glass-card rounded-2xl relative" style="height:520px;">
-            <div class="absolute top-3 left-3 z-10 text-xs text-slate-400 bg-slate-900/60 rounded-lg px-3 py-1.5 border border-slate-700/50 pointer-events-none"><i class="fas fa-arrows-alt mr-1"></i>Drag to orbit · scroll to zoom · click an object to edit</div>
+            <div class="absolute top-3 left-3 z-10 text-xs text-slate-400 bg-slate-900/60 rounded-lg px-3 py-1.5 border border-slate-700/50 pointer-events-none"><i class="fas fa-arrows-alt mr-1"></i>Drag item = move · wheel = zoom (over selected item = resize) · drag empty = orbit · dbl-click = edit</div>
           </div>
           <div class="glass-card rounded-2xl p-4 overflow-x-auto">
             <div class="flex items-center justify-between mb-3"><h3 class="font-semibold text-sm"><i class="fas fa-list mr-1.5 text-indigo-400"></i>Placements in ${room.name}</h3><span class="text-xs text-slate-500">footprint = square side in ft</span></div>
@@ -939,6 +1309,7 @@
       $('#space-add-room-empty')?.addEventListener('click', () => openRoomForm())
       $('#space-edit-room')?.addEventListener('click', () => openRoomForm(room))
       $('#space-add-placement')?.addEventListener('click', () => openPlacementForm(room))
+      $('#space-analyze')?.addEventListener('click', () => openSpatialAnalysis(room))
       $$('.space-edit-p').forEach(b => b.addEventListener('click', () => openPlacementForm(room, placements.find(p => p.id === Number(b.dataset.id)))))
       $$('.space-del-p').forEach(b => b.addEventListener('click', async () => {
         const p = placements.find(x => x.id === Number(b.dataset.id))
@@ -1053,89 +1424,147 @@
     })
   }
 
-  // 3D floor-layout renderer — 1 world unit = 1 foot, day/night aware
+  // ── SPATIAL COPILOT — layout analysis + guideline recommendations ──
+  async function openSpatialAnalysis(room) {
+    if (!room) return
+    const SEV_COLORS = { critical: 'bg-red-500/15 text-red-400 border-red-500/30', high: 'bg-amber-500/15 text-amber-400 border-amber-500/30', medium: 'bg-sky-500/15 text-sky-400 border-sky-500/30' }
+    showModal(`
+      <div class="space-y-4 text-left">
+        <h3 class="text-lg font-bold"><i class="fas fa-brain text-cyan-400 mr-2"></i>Spatial Copilot — ${room.name}</h3>
+        <div id="spatial-body" class="space-y-3">
+          <div class="flex items-center gap-2 text-slate-400 text-sm py-6 justify-center"><div class="w-4 h-4 border-2 border-cyan-500/30 border-t-cyan-400 rounded-full animate-spin"></div>Computing layout metrics &amp; asking the LLM copilot…</div>
+        </div>
+      </div>`)
+    const body = $('#spatial-body')
+    try {
+      const { data } = await API.post('/space/analyze', { room_id: room.id, role: state.role })
+      const m = data.metrics
+      body.innerHTML = `
+        <div class="grid grid-cols-3 gap-2">
+          <div class="bg-slate-800/60 border border-slate-700/40 rounded-xl p-3 text-center"><div class="text-xs text-slate-500">Utilization</div><div class="text-lg font-extrabold ${m.utilization_pct > 55 ? 'text-red-400' : 'text-emerald-400'}">${m.utilization_pct}%</div></div>
+          <div class="bg-slate-800/60 border border-slate-700/40 rounded-xl p-3 text-center"><div class="text-xs text-slate-500">Items</div><div class="text-lg font-extrabold">${m.items}</div></div>
+          <div class="bg-slate-800/60 border border-slate-700/40 rounded-xl p-3 text-center"><div class="text-xs text-slate-500">Issues</div><div class="text-lg font-extrabold ${data.issues.length ? 'text-amber-400' : 'text-emerald-400'}">${data.issues.length}</div></div>
+        </div>
+        ${data.issues.length ? `<div class="space-y-1.5">
+          <div class="text-xs font-bold uppercase tracking-wider text-slate-400">Detected Issues</div>
+          ${data.issues.map(i => `<div class="border rounded-lg px-3 py-2 text-xs ${SEV_COLORS[i.severity] || SEV_COLORS.medium}"><span class="font-bold uppercase mr-1.5">${i.severity}</span>${i.text}</div>`).join('')}
+        </div>` : '<div class="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-lg px-3 py-2 text-xs"><i class="fas fa-check-circle mr-1"></i>No overlaps or clearance violations detected.</div>'}
+        ${m.pair_clearances.length ? `<details class="text-xs"><summary class="text-slate-500 cursor-pointer hover:text-slate-300">Pairwise clearances (${m.pair_clearances.length})</summary><div class="mt-1.5 max-h-32 overflow-y-auto space-y-1 bg-slate-800/40 rounded-lg p-2">${m.pair_clearances.map(p => `<div class="flex justify-between text-slate-400"><span>${p.a} ↔ ${p.b}</span><span class="${p.overlap ? 'text-red-400 font-bold' : p.clearance_ft < 3 ? 'text-amber-400' : ''}">${p.overlap ? 'OVERLAP' : p.clearance_ft + ' ft'}</span></div>`).join('')}</div></details>` : ''}
+        <div class="border-t border-slate-700/40 pt-3">
+          <div class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2"><i class="fas fa-wand-magic-sparkles text-indigo-400 mr-1"></i>Copilot Recommendations ${data.llm_used ? '' : '<span class="normal-case font-normal text-slate-500">(add a kie.ai key in Report Creator → API Vault to enable)</span>'}</div>
+          <div class="bg-slate-800/60 border border-slate-700/40 rounded-xl p-4 text-sm text-slate-200 whitespace-pre-wrap max-h-64 overflow-y-auto">${data.ai || 'LLM copilot unavailable — metrics above are computed locally. Store an API key in the vault to get guideline recommendations and repositioning suggestions.'}</div>
+        </div>`
+    } catch (e) {
+      body.innerHTML = `<p class="text-red-400 text-sm">${e.response?.data?.error || e.message}</p>`
+    }
+  }
+
+  // 3D floor-layout renderer (v5 interactive) — 1 world unit = 1 foot.
+  // Interactions: left-drag an item = move (clamped inside room), wheel over a
+  // selected item = resize footprint, drag empty space = orbit, hover = quick-tip,
+  // double-click = edit form. Day/night aware.
   function initSpacePlanner3D(room, placements) {
     const container = $('#space-3d')
     if (!container || !window.THREE) return
     container.querySelectorAll('canvas').forEach(c => c.remove())
+    $('#space-tip')?.remove()
 
     const isDay = state.theme === 'day'
     const W = container.clientWidth, H = container.clientHeight
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color(isDay ? 0xe8edf5 : 0x0f172a)
+    scene.background = new THREE.Color(isDay ? 0xe8edf5 : 0x0b1220)
+    scene.fog = new THREE.Fog(isDay ? 0xe8edf5 : 0x0b1220, max2(room.width_ft, room.length_ft) * 2.4, max2(room.width_ft, room.length_ft) * 6)
 
+    function max2(a, b) { return Math.max(a, b) }
     const maxDim = Math.max(room.width_ft, room.length_ft)
-    const camera = new THREE.PerspectiveCamera(50, W / H, 0.5, 2000)
     const cx = room.width_ft / 2, cz = room.length_ft / 2
-    camera.position.set(cx + maxDim * 0.7, maxDim * 0.95, cz + maxDim * 0.85)
-    camera.lookAt(cx, 0, cz)
+    const camera = new THREE.PerspectiveCamera(50, W / H, 0.5, 2000)
 
     const renderer = new THREE.WebGLRenderer({ antialias: true })
     renderer.setSize(W, H)
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
     renderer.shadowMap.enabled = true
     renderer.shadowMap.type = THREE.PCFSoftShadowMap
     container.appendChild(renderer.domElement)
-    const hoverCard = document.createElement('div')
-    hoverCard.className = 'planner-hover-card hidden absolute z-20 pointer-events-none max-w-xs rounded-xl border border-cyan-400/30 bg-slate-950/95 p-3 text-xs shadow-2xl'
-    container.appendChild(hoverCard)
 
-    scene.add(new THREE.AmbientLight(isDay ? 0xffffff : 0x8090b0, isDay ? 0.9 : 0.7))
-    const dir = new THREE.DirectionalLight(0xffffff, isDay ? 1.6 : 1.2)
+    scene.add(new THREE.AmbientLight(isDay ? 0xffffff : 0x8090b0, isDay ? 0.95 : 0.75))
+    const dir = new THREE.DirectionalLight(0xffffff, isDay ? 1.7 : 1.25)
     dir.position.set(cx + 40, maxDim * 1.5, cz + 30)
     dir.castShadow = true
     dir.shadow.mapSize.set(2048, 2048)
-    const sc = dir.shadow.camera
-    sc.left = -maxDim; sc.right = maxDim; sc.top = maxDim; sc.bottom = -maxDim
+    dir.shadow.camera.left = -maxDim; dir.shadow.camera.right = maxDim
+    dir.shadow.camera.top = maxDim; dir.shadow.camera.bottom = -maxDim
     scene.add(dir)
+    const rim = new THREE.PointLight(0x6366f1, maxDim * 2.2, maxDim * 5)
+    rim.position.set(-maxDim * 0.5, maxDim * 0.8, -maxDim * 0.5)
+    scene.add(rim)
 
-    // Floor slab (room at real ft scale)
-    const floorGeo = new THREE.PlaneGeometry(room.width_ft, room.length_ft)
-    const floorMat = new THREE.MeshStandardMaterial({ color: isDay ? 0xf1f5f9 : 0x1e293b, roughness: 0.9, metalness: 0.05 })
-    const floor = new THREE.Mesh(floorGeo, floorMat)
+    // Floor slab + perimeter walls + feet grid
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(room.width_ft, room.length_ft),
+      new THREE.MeshStandardMaterial({ color: isDay ? 0xf1f5f9 : 0x1a2338, roughness: 0.92, metalness: 0.04 }))
     floor.rotation.x = -Math.PI / 2
     floor.position.set(cx, 0, cz)
     floor.receiveShadow = true
     scene.add(floor)
 
-    // Perimeter walls (semi-transparent, 8 ft)
-    const wallMat = new THREE.MeshStandardMaterial({ color: isDay ? 0xcbd5e1 : 0x334155, transparent: true, opacity: 0.35, roughness: 0.8 })
+    const wallMat = new THREE.MeshStandardMaterial({ color: isDay ? 0xcbd5e1 : 0x2a3550, transparent: true, opacity: 0.32, roughness: 0.8 })
     const wallH = 8
     const mkWall = (w, d, x, z) => {
       const wall = new THREE.Mesh(new THREE.BoxGeometry(w, wallH, d), wallMat)
-      wall.position.set(x, wallH / 2, z)
-      scene.add(wall)
+      wall.position.set(x, wallH / 2, z); scene.add(wall)
     }
-    mkWall(room.width_ft, 0.4, cx, 0)
-    mkWall(room.width_ft, 0.4, cx, room.length_ft)
-    mkWall(0.4, room.length_ft, 0, cz)
-    mkWall(0.4, room.length_ft, room.width_ft, cz)
+    mkWall(room.width_ft, 0.4, cx, 0); mkWall(room.width_ft, 0.4, cx, room.length_ft)
+    mkWall(0.4, room.length_ft, 0, cz); mkWall(0.4, room.length_ft, room.width_ft, cz)
 
-    // Grid in feet
-    const grid = new THREE.GridHelper(maxDim, Math.round(maxDim / 2), isDay ? 0x94a3b8 : 0x334155, isDay ? 0xd7dee9 : 0x1e293b)
+    const gridStep = 5
+    const grid = new THREE.GridHelper(maxDim, Math.round(maxDim / gridStep), isDay ? 0x94a3b8 : 0x3b4a75, isDay ? 0xd7dee9 : 0x1c2740)
     grid.position.set(cx, 0.02, cz)
     scene.add(grid)
 
-    // Equipment boxes with square footprints
+    // Quick-tip overlay
+    const tip = document.createElement('div')
+    tip.id = 'space-tip'
+    tip.className = 'absolute z-20 pointer-events-none hidden px-3 py-2 rounded-xl text-xs shadow-xl border'
+    tip.style.cssText = `background:${isDay ? 'rgba(255,255,255,0.96)' : 'rgba(8,12,24,0.94)'};border-color:${isDay ? 'rgba(79,70,229,0.35)' : 'rgba(99,102,241,0.45)'};backdrop-filter:blur(6px);max-width:240px;`
+    container.appendChild(tip)
+
+    // Selection HUD — always shows what is selected so wheel-resize is never a surprise
+    const selChip = document.createElement('div')
+    selChip.id = 'space-sel-chip'
+    selChip.className = 'absolute z-20 hidden px-3 py-2 rounded-xl text-xs shadow-xl border'
+    selChip.style.cssText = `bottom:12px;left:12px;background:${isDay ? 'rgba(255,255,255,0.96)' : 'rgba(8,12,24,0.94)'};border-color:rgba(34,211,238,0.5);backdrop-filter:blur(6px);`
+    container.appendChild(selChip)
+
+    // Equipment meshes
     const meshes = []
+    const items = []
     placements.forEach(p => {
       const fp = Number(p.footprint_ft) || 1
-      const geo = new THREE.BoxGeometry(fp, Number(p.height_ft) || 3, fp)
-      const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(p.color || '#6366f1'), roughness: 0.45, metalness: 0.15, transparent: true, opacity: 0.92 })
+      const hgt = Number(p.height_ft) || 3
+      const geo = new THREE.BoxGeometry(fp, hgt, fp)
+      const mat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(p.color || '#6366f1'),
+        roughness: 0.4, metalness: 0.2, transparent: true, opacity: 0.92,
+        emissive: new THREE.Color(p.color || '#6366f1'), emissiveIntensity: 0
+      })
       const mesh = new THREE.Mesh(geo, mat)
-      mesh.position.set(Number(p.x_ft) + fp / 2, (Number(p.height_ft) || 3) / 2, Number(p.y_ft) + fp / 2)
+      mesh.position.set(Number(p.x_ft) + fp / 2, hgt / 2, Number(p.y_ft) + fp / 2)
       mesh.castShadow = true; mesh.receiveShadow = true
-      mesh.userData = { placement: p }
+      mesh.userData = { placement: { ...p }, fp, hgt }
       scene.add(mesh)
-      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: isDay ? 0x0f172a : 0xffffff, transparent: true, opacity: 0.35 }))
+      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo),
+        new THREE.LineBasicMaterial({ color: isDay ? 0x0f172a : 0xffffff, transparent: true, opacity: 0.3 }))
       edges.position.copy(mesh.position)
       scene.add(edges)
+      mesh.userData.edges = edges
       meshes.push(mesh)
+      items.push(p)
 
-      // Floating label sprite
       const cv = document.createElement('canvas')
       cv.width = 512; cv.height = 128
       const ctx = cv.getContext('2d')
-      ctx.fillStyle = isDay ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.85)'
+      ctx.fillStyle = isDay ? 'rgba(255,255,255,0.92)' : 'rgba(10,15,30,0.88)'
       ctx.strokeStyle = p.color || '#6366f1'
       ctx.lineWidth = 4
       ctx.beginPath(); ctx.roundRect(6, 6, 500, 116, 18); ctx.fill(); ctx.stroke()
@@ -1144,76 +1573,222 @@
       ctx.fillText(p.item_name, 256, 58, 470)
       ctx.fillStyle = isDay ? '#64748b' : '#94a3b8'
       ctx.font = '30px sans-serif'
-      ctx.fillText(`${fp}×${fp} ft`, 256, 100)
+      ctx.fillText(`${fp}×${fp} ft · ${p.status}`, 256, 100)
       const tex = new THREE.CanvasTexture(cv)
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }))
       sprite.scale.set(fp * 1.6, fp * 0.4, 1)
-      sprite.position.set(mesh.position.x, (Number(p.height_ft) || 3) + Math.max(1.6, fp * 0.28), mesh.position.z)
+      sprite.position.set(mesh.position.x, hgt + Math.max(1.6, fp * 0.28), mesh.position.z)
       scene.add(sprite)
+      mesh.userData.sprite = sprite
     })
 
-    // Click to edit placement
+    function rebuildMeshGeometry(mesh) {
+      const u = mesh.userData
+      const geo = new THREE.BoxGeometry(u.fp, u.hgt, u.fp)
+      mesh.geometry.dispose(); mesh.geometry = geo
+      mesh.userData.edges.geometry.dispose()
+      mesh.userData.edges.geometry = new THREE.EdgesGeometry(geo)
+    }
+    function syncMeshTransform(mesh) {
+      const u = mesh.userData
+      mesh.position.set(u.placement.x_ft + u.fp / 2, u.hgt / 2, u.placement.y_ft + u.fp / 2)
+      mesh.userData.edges.position.copy(mesh.position)
+      mesh.userData.sprite.position.set(mesh.position.x, u.hgt + Math.max(1.6, u.fp * 0.28), mesh.position.z)
+    }
+
+    // Selection ring
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(1, 1.08, 48),
+      new THREE.MeshBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.85, side: THREE.DoubleSide }))
+    ring.rotation.x = -Math.PI / 2
+    ring.position.y = 0.05
+    ring.visible = false
+    scene.add(ring)
+    let selected = null
+    function select(mesh) {
+      selected = mesh
+      if (mesh) {
+        const u = mesh.userData
+        ring.scale.set(u.fp * 0.85, u.fp * 0.85, 1)
+        ring.position.set(mesh.position.x, 0.05, mesh.position.z)
+        ring.visible = true
+        selChip.classList.remove('hidden')
+        selChip.innerHTML = `<span class="font-semibold" style="color:${u.placement.color}">${u.placement.item_name}</span> <span class="text-slate-400">· ${u.fp}×${u.fp} ft · wheel over it = resize · click empty space to deselect</span>`
+      } else {
+        ring.visible = false
+        selChip.classList.add('hidden')
+      }
+    }
+
+    // Raycast helpers
     const raycaster = new THREE.Raycaster()
     const mouse = new THREE.Vector2()
-    let downAt = null
-    container.addEventListener('mousedown', (e) => { downAt = { x: e.clientX, y: e.clientY } })
-    container.addEventListener('mouseup', (e) => {
-      if (!downAt || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 5) { downAt = null; return }
-      downAt = null
+    const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+    const planeHit = new THREE.Vector3()
+    function setMouse(e) {
       const rect = container.getBoundingClientRect()
       mouse.x = ((e.clientX - rect.left) / W) * 2 - 1
       mouse.y = -((e.clientY - rect.top) / H) * 2 + 1
+    }
+    function rayItems(e) {
+      setMouse(e)
       raycaster.setFromCamera(mouse, camera)
       const hits = raycaster.intersectObjects(meshes)
-      if (hits.length) openPlacementForm(room, hits[0].object.userData.placement)
-    })
-    // Hover highlight
-    container.addEventListener('mousemove', (e) => {
-      const rect = container.getBoundingClientRect()
-      mouse.x = ((e.clientX - rect.left) / W) * 2 - 1
-      mouse.y = -((e.clientY - rect.top) / H) * 2 + 1
+      return hits.length ? hits[0].object : null
+    }
+    function rayFloor(e) {
+      setMouse(e)
       raycaster.setFromCamera(mouse, camera)
-      const hits = raycaster.intersectObjects(meshes)
-      meshes.forEach(m => m.material.emissive.set(0x000000))
-      if (hits.length) {
-        const p = hits[0].object.userData.placement
-        hits[0].object.material.emissive.set(0x333333); container.style.cursor = 'pointer'
-        let details = {}
-        try { details = JSON.parse(p.extracted_details || '{}') } catch (_) {}
-        const detailText = Object.entries(details).slice(0, 4).map(([k, v]) => `<div><span class="text-slate-500">${k}:</span> ${v}</div>`).join('')
-        hoverCard.innerHTML = `<div class="font-semibold text-cyan-300 mb-1">${p.item_name}</div><div class="text-slate-300">${p.notes || 'Review placement, operating envelope, and access requirements.'}</div>${p.source_url ? `<div class="mt-2 text-indigo-300 truncate">Source: ${p.source_url}</div>` : ''}${detailText ? `<div class="mt-2 border-t border-slate-800 pt-2 text-slate-400">${detailText}</div>` : ''}`
-        hoverCard.style.left = `${Math.min(e.clientX - rect.left + 14, W - 280)}px`; hoverCard.style.top = `${Math.min(e.clientY - rect.top + 14, H - 130)}px`; hoverCard.classList.remove('hidden')
-      } else { container.style.cursor = 'grab'; hoverCard.classList.add('hidden') }
+      return raycaster.ray.intersectPlane(floorPlane, planeHit) ? planeHit.clone() : null
+    }
+    const clampInRoom = (p, fp) => ({
+      x: Math.max(0, Math.min(room.width_ft - fp, p.x)),
+      y: Math.max(0, Math.min(room.length_ft - fp, p.y))
     })
 
-    // Orbit around room center + zoom
-    let isDragging = false, prevX = 0, prevY = 0, angle = Math.atan2(camera.position.z - cz, camera.position.x - cx), radius = Math.hypot(camera.position.x - cx, camera.position.z - cz), camY = camera.position.y
-    container.addEventListener('mousedown', (e) => { isDragging = true; prevX = e.clientX; prevY = e.clientY })
-    window.addEventListener('mouseup', () => { isDragging = false })
-    window.addEventListener('mousemove', (e) => {
-      if (!isDragging || state.activeView !== 'facility') return
-      const dx = e.clientX - prevX, dy = e.clientY - prevY
-      angle -= dx * 0.008
-      camY = Math.max(maxDim * 0.2, Math.min(maxDim * 2.2, camY + dy * 0.25))
+    // ── Interaction state machine ──
+    let mode = 'idle' // idle | orbiting | moving
+    let prevX = 0, prevY = 0
+    let angle = 0.55, camY = maxDim * 0.95
+    let radius = maxDim * 1.15
+    let moveGrab = null, moveOffset = { x: 0, z: 0 }, moved = false, downAt = null
+    function placeCamera() {
       camera.position.set(cx + radius * Math.cos(angle), camY, cz + radius * Math.sin(angle))
       camera.lookAt(cx, 0, cz)
+    }
+    placeCamera()
+
+    container.addEventListener('mousedown', (e) => {
+      downAt = { x: e.clientX, y: e.clientY }
+      const hit = rayItems(e)
+      if (hit) {
+        mode = 'moving'; moved = false; moveGrab = hit; select(hit)
+        const fp = hit.userData.fp
+        const floorPt = rayFloor(e)
+        if (floorPt) moveOffset = { x: floorPt.x - hit.userData.placement.x_ft, z: floorPt.z - hit.userData.placement.y_ft }
+        container.style.cursor = 'grabbing'
+        tip.classList.add('hidden')
+      } else {
+        mode = 'orbiting'; select(null)
+      }
       prevX = e.clientX; prevY = e.clientY
     })
-    container.addEventListener('wheel', (e) => {
+    window.addEventListener('mouseup', async () => {
+      if (mode === 'moving' && moveGrab && moved) {
+        const u = moveGrab.userData
+        try {
+          await API.put(`/space/placements/${u.placement.id}`, { x_ft: Math.round(u.placement.x_ft * 2) / 2, y_ft: Math.round(u.placement.y_ft * 2) / 2 })
+          toast(`${u.placement.item_name} moved to (${u.placement.x_ft}, ${u.placement.y_ft}) ft`, 'success')
+          const row = document.querySelector(`.space-edit-p[data-id="${u.placement.id}"]`)?.closest('tr')
+          if (row) {
+            const cells = row.querySelectorAll('td')
+            if (cells[3]) cells[3].textContent = `${u.placement.x_ft}, ${u.placement.y_ft}`
+          }
+        } catch { toast('Move failed to save', 'error') }
+      }
+      mode = 'idle'; moveGrab = null
+      container.style.cursor = 'grab'
+    })
+    window.addEventListener('mousemove', (e) => {
+      if (state.activeView !== 'facility' || state.facilityMode !== 'planner') return
+      if (mode === 'moving' && moveGrab) {
+        const floorPt = rayFloor(e)
+        if (floorPt) {
+          const fp = moveGrab.userData.fp
+          const nx = floorPt.x - moveOffset.x, ny = floorPt.z - moveOffset.z
+          const clamped = clampInRoom({ x: nx, y: ny }, fp)
+          moveGrab.userData.placement.x_ft = Math.round(clamped.x * 2) / 2
+          moveGrab.userData.placement.y_ft = Math.round(clamped.y * 2) / 2
+          syncMeshTransform(moveGrab)
+          select(moveGrab)
+          moved = true
+        }
+        return
+      }
+      if (mode === 'orbiting' && downAt) {
+        const dx = e.clientX - prevX, dy = e.clientY - prevY
+        if (Math.hypot(dx, dy) > 2) moved = true
+        angle -= dx * 0.008
+        camY = Math.max(maxDim * 0.2, Math.min(maxDim * 2.2, camY + dy * 0.25))
+        placeCamera()
+        prevX = e.clientX; prevY = e.clientY
+        tip.classList.add('hidden')
+        return
+      }
+      // Hover quick-tip
+      const hit = rayItems(e)
+      meshes.forEach(m => { m.material.emissiveIntensity = m === hit ? 0.25 : 0 })
+      if (hit) {
+        const p = hit.userData.placement, u = hit.userData
+        let specs = {}
+        try { specs = JSON.parse(p.extracted_details || '{}') } catch (_) {}
+        const specRows = Object.entries(specs).slice(0, 3).map(([k, v]) => `<div class="text-slate-400"><span class="text-slate-500">${k}:</span> ${v}</div>`).join('')
+        tip.innerHTML = `<div class="font-bold mb-0.5" style="color:${p.color}">${p.item_name}</div>
+          <div class="text-slate-400">Footprint: <b class="text-slate-200">${u.fp}×${u.fp} ft</b> (${u.fp * u.fp} sq ft)</div>
+          <div class="text-slate-400">Height: ${u.hgt} ft · Position: (${p.x_ft}, ${p.y_ft}) ft</div>
+          <div class="capitalize ${SPACE_STATUS_COLORS[p.status] || 'text-slate-400'}">${p.status}</div>
+          ${p.notes ? `<div class="text-slate-500 mt-0.5 italic">${p.notes}</div>` : ''}
+          ${p.source_url ? `<div class="mt-0.5 text-indigo-300 truncate">Source: ${p.source_url}</div>` : ''}
+          ${specRows ? `<div class="mt-1 border-t border-slate-700/40 pt-1">${specRows}</div>` : ''}
+          <div class="text-slate-500 mt-1 border-t border-slate-700/40 pt-1">drag = move · hover + wheel = resize · wheel elsewhere = zoom · dbl-click = edit</div>`
+        const rect = container.getBoundingClientRect()
+        tip.style.left = Math.min(e.clientX - rect.left + 14, W - 250) + 'px'
+        tip.style.top = Math.max(8, e.clientY - rect.top - 10) + 'px'
+        tip.classList.remove('hidden')
+        container.style.cursor = 'move'
+      } else {
+        tip.classList.add('hidden')
+        container.style.cursor = 'grab'
+      }
+    })
+    container.addEventListener('mouseleave', () => tip.classList.add('hidden'))
+    container.addEventListener('dblclick', (e) => {
+      const hit = rayItems(e)
+      if (hit) openPlacementForm(room, hit.userData.placement)
+    })
+    container.addEventListener('wheel', async (e) => {
       e.preventDefault()
-      radius = Math.max(maxDim * 0.5, Math.min(maxDim * 3, radius + e.deltaY * 0.08))
-      camera.position.set(cx + radius * Math.cos(angle), camY, cz + radius * Math.sin(angle))
-      camera.lookAt(cx, 0, cz)
+      // Resize ONLY when the cursor is directly over the selected item — otherwise
+      // wheel always zooms the camera. This prevents accidental footprint shrinkage
+      // right after a move (the Test Cage 12ft -> 1.5ft bug on production).
+      const overSelected = selected && rayItems(e) === selected
+      if (selected && overSelected) {
+        const u = selected.userData
+        const delta = e.deltaY < 0 ? 0.5 : -0.5
+        const minDim = Math.min(room.width_ft, room.length_ft)
+        const newFp = Math.max(1, Math.min(minDim, Math.round((u.fp + delta) * 2) / 2))
+        if (newFp === u.fp) return
+        u.fp = newFp
+        u.placement.footprint_ft = newFp
+        const clamped = clampInRoom(u.placement, newFp)
+        u.placement.x_ft = clamped.x; u.placement.y_ft = clamped.y
+        rebuildMeshGeometry(selected)
+        syncMeshTransform(selected)
+        select(selected)
+        try {
+          await API.put(`/space/placements/${u.placement.id}`, { footprint_ft: newFp, x_ft: clamped.x, y_ft: clamped.y })
+          const row = document.querySelector(`.space-edit-p[data-id="${u.placement.id}"]`)?.closest('tr')
+          if (row) {
+            const cells = row.querySelectorAll('td')
+            if (cells[2]) cells[2].innerHTML = `${newFp}×${newFp} ft <span class="text-slate-500">(${newFp * newFp} sf)</span>`
+          }
+          toast(`${u.placement.item_name} footprint → ${newFp}×${newFp} ft`, 'info')
+        } catch { toast('Resize failed to save', 'error') }
+      } else {
+        radius = Math.max(maxDim * 0.45, Math.min(maxDim * 3, radius + e.deltaY * 0.08))
+        placeCamera()
+      }
     }, { passive: false })
 
     function animate() {
-      if (state.activeView !== 'facility' || state.facilityMode !== 'planner') return
+      if (state.activeView !== 'facility' || state.facilityMode !== 'planner') { renderer.dispose(); return }
       if (!document.body.contains(renderer.domElement)) return
       requestAnimationFrame(animate)
       renderer.render(scene, camera)
     }
     animate()
   }
+
 
   async function initThreeJS() {
     const container = $('#three-container')
@@ -1333,134 +1908,6 @@
   }
 
   // ── REPORTS VIEW ─────────────────────────────────────────
-  async function renderReportsView() {
-    const content = $('#main-content')
-    try {
-      const { data: daily } = await API.get('/reports/daily')
-      const { data: weekly } = await API.get('/reports/weekly')
-      const { data: monthly } = await API.get('/reports/monthly')
-      const { data: saved } = await API.get('/reports/saved')
-      const isVenture = state.role === 'venture_owner'
-
-      content.innerHTML = `
-        <div class="space-y-6">
-          <div class="flex items-center justify-between">
-            <div><h2 class="text-xl font-bold">Reports</h2><p class="text-sm text-slate-400">Daily / Weekly / Monthly Reporting</p></div>
-            <div class="flex gap-2">
-              ${!isVenture ? '<button id="new-daily-btn" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition btn-glow"><i class="fas fa-plus mr-1"></i> Daily Update</button>' : ''}
-              <button id="report-email-btn" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-4 py-2 rounded-xl text-sm font-medium transition"><i class="fas fa-envelope mr-1"></i> Email Report</button>
-              <button id="export-csv-btn" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-4 py-2 rounded-xl text-sm font-medium transition"><i class="fas fa-download mr-1"></i> Export KPI CSV</button>
-            </div>
-          </div>
-          <div class="flex gap-1 bg-slate-900/60 rounded-xl p-1 w-fit border border-slate-800">
-            <button class="report-tab px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600/20 text-indigo-400" data-rt="daily">Daily</button>
-            <button class="report-tab px-4 py-2 rounded-lg text-sm font-medium text-slate-400 hover:text-slate-200" data-rt="weekly">Weekly</button>
-            <button class="report-tab px-4 py-2 rounded-lg text-sm font-medium text-slate-400 hover:text-slate-200" data-rt="monthly">Monthly</button>
-            <button class="report-tab px-4 py-2 rounded-lg text-sm font-medium text-slate-400 hover:text-slate-200" data-rt="saved">Saved Reports</button>
-          </div>
-          <div id="report-content-area" class="space-y-4"></div>
-        </div>`
-
-      renderReportContent('daily', daily, weekly, monthly, saved, isVenture)
-
-      $$('.report-tab').forEach(btn => {
-        btn.addEventListener('click', () => {
-          $$('.report-tab').forEach(b => { b.className = 'report-tab px-4 py-2 rounded-lg text-sm font-medium text-slate-400 hover:text-slate-200' })
-          btn.className = 'report-tab px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600/20 text-indigo-400'
-          renderReportContent(btn.dataset.rt, daily, weekly, monthly, saved, isVenture)
-        })
-      })
-
-      if (!isVenture) $('#new-daily-btn').addEventListener('click', () => openDailyReportForm())
-      $('#report-email-btn').addEventListener('click', () => openEmailShareModal('report'))
-      $('#export-csv-btn').addEventListener('click', () => downloadCSV('kpis'))
-
-      gsap.from('#report-content-area > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.08 })
-    } catch (e) {
-      content.innerHTML = errorHtml('reports', e)
-    }
-  }
-
-  function renderReportContent(type, daily, weekly, monthly, saved, isVenture) {
-    const area = $('#report-content-area')
-    if (!area) return
-    switch (type) {
-      case 'daily':
-        area.innerHTML = daily.length === 0 ? '<div class="glass-card rounded-xl p-8 text-center"><p class="text-slate-500">No daily updates yet.</p></div>' : daily.map(d => `
-          <div class="glass-card rounded-xl p-5 space-y-2">
-            <div class="flex items-center justify-between"><span class="font-semibold">${d.report_date}</span><span class="text-xs text-slate-500">${d.created_at || ''}</span></div>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-              <div><span class="text-slate-500">Attendance:</span> <span class="text-slate-300">${d.cohort_attendance || '—'}</span></div>
-              <div><span class="text-slate-500">Safety Issues:</span> <span class="text-slate-300">${d.facility_safety_issues || 'None'}</span></div>
-              <div><span class="text-slate-500">Vendor Blockers:</span> <span class="text-slate-300">${d.vendor_asset_blockers || 'None'}</span></div>
-              <div><span class="text-slate-500">Prototype Status:</span> <span class="text-slate-300">${d.prototype_test_status || '—'}</span></div>
-            </div>
-            <p><span class="text-slate-500">Decisions Needed:</span> <span class="text-amber-400">${d.decisions_needed || 'None'}</span></p>
-          </div>`).join('')
-        break
-      case 'weekly':
-        area.innerHTML = weekly.length === 0 ? '<div class="glass-card rounded-xl p-8 text-center"><p class="text-slate-500">No weekly reports yet.</p></div>' : weekly.map(w => `
-          <div class="glass-card rounded-xl p-5 space-y-2">
-            <div class="flex items-center justify-between"><span class="font-semibold">${w.week_start} → ${w.week_end}</span><span class="status-badge status-${w.status}">${w.status}</span></div>
-            <div class="text-sm space-y-1">
-              <p><span class="text-slate-500">Progress vs Plan:</span> ${w.progress_vs_plan || '—'}</p>
-              <p><span class="text-slate-500">Risks:</span> ${w.risks_mitigations || '—'}</p>
-              <p><span class="text-slate-500">Asks:</span> ${w.asks || '—'}</p>
-            </div>
-          </div>`).join('')
-        break
-      case 'monthly':
-        area.innerHTML = monthly.length === 0 ? '<div class="glass-card rounded-xl p-8 text-center"><p class="text-slate-500">No monthly reports yet.</p></div>' : monthly.map(m => `
-          <div class="glass-card rounded-xl p-5 space-y-2">
-            <div class="flex items-center justify-between"><span class="font-semibold">${m.report_month}</span><span class="status-badge status-${m.status}">${m.status}</span></div>
-            <div class="text-sm space-y-1">
-              <p><span class="text-slate-500">Strategic Decisions:</span> ${m.strategic_decisions || '—'}</p>
-              <p><span class="text-slate-500">Budget Approvals:</span> ${m.budget_approvals || '—'}</p>
-              <p><span class="text-slate-500">Next Month:</span> ${m.next_month_plan || '—'}</p>
-            </div>
-          </div>`).join('')
-        break
-      case 'saved':
-        area.innerHTML = saved.length === 0 ? '<div class="glass-card rounded-xl p-8 text-center"><p class="text-slate-500">No saved reports yet.</p></div>' : saved.map(r => `
-          <div class="glass-card rounded-xl p-5 space-y-3">
-            <div class="flex items-center justify-between">
-              <span class="font-semibold">${r.title}</span>
-              <div class="flex gap-2">
-                ${r.share_token ? `<button onclick="window._copyShareLink('${r.share_token}')" class="text-xs bg-slate-700/50 hover:bg-slate-600 px-3 py-1.5 rounded-lg transition border border-slate-700"><i class="fas fa-share-alt mr-1"></i>Copy Link</button>` : ''}
-                <button onclick="window._shareReport('${r.title}','${(r.content || '').replace(/'/g, "\\'").replace(/\n/g, '\\n')}')" class="text-xs bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded-lg transition"><i class="fas fa-paper-plane mr-1"></i>Share</button>
-              </div>
-            </div>
-            <p class="text-xs text-slate-500">${r.report_type} &middot; ${r.created_at || ''}</p>
-            ${r.content ? `<div class="text-sm text-slate-300 bg-slate-800/60 rounded-xl p-4 max-h-48 overflow-y-auto whitespace-pre-wrap border border-slate-700/30">${r.content.substring(0, 800)}${r.content.length > 800 ? '...' : ''}</div>` : ''}
-          </div>`).join('')
-        break
-    }
-  }
-
-  async function openDailyReportForm() {
-    const today = dayjs().format('YYYY-MM-DD')
-    showModal(`
-      <form id="daily-form" class="space-y-4 text-left">
-        <h3 class="text-lg font-bold">Daily Update — ${today}</h3>
-        <div><label class="text-xs text-slate-400">Cohort Attendance</label><textarea name="cohort_attendance" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500" placeholder="e.g., 18/20 present"></textarea></div>
-        <div><label class="text-xs text-slate-400">Facility/Safety Issues</label><textarea name="facility_safety_issues" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
-        <div><label class="text-xs text-slate-400">Vendor/Asset Blockers</label><textarea name="vendor_asset_blockers" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
-        <div><label class="text-xs text-slate-400">Prototype/Test Status</label><textarea name="prototype_test_status" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
-        <div><label class="text-xs text-slate-400">Decisions Needed <span class="text-amber-400">*</span></label><textarea name="decisions_needed" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100 placeholder-slate-500"></textarea></div>
-        <input type="hidden" name="report_date" value="${today}">
-        <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow">Submit Daily Update</button>
-      </form>`)
-
-    $('#daily-form').addEventListener('submit', async (e) => {
-      e.preventDefault()
-      const fd = new FormData(e.target)
-      await API.post('/reports/daily', Object.fromEntries(fd.entries()))
-      toast('Daily update submitted!', 'success')
-      closeModal()
-      state.activeView = 'reports'; navigateView()
-    })
-  }
-
   // ── ROADMAP VIEW ─────────────────────────────────────────
   async function renderRoadmap() {
     const content = $('#main-content')
@@ -1508,7 +1955,7 @@
         state.activeView = 'roadmap'; navigateView()
       }
 
-      gsap.from('#roadmap-timeline > .space-y-6 > div', { x: -30, opacity: 0, duration: 0.5, stagger: 0.12 })
+      animateIn('#roadmap-timeline > .space-y-6 > div', { x: -30, opacity: 0, duration: 0.5, stagger: 0.12 })
     } catch (e) {
       content.innerHTML = errorHtml('roadmap', e)
     }
@@ -1561,7 +2008,7 @@
         toast('Procurement status updated.', 'success')
       }
 
-      gsap.from('#bucket-summary > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.1 })
+      animateIn('#bucket-summary > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.1 })
     } catch (e) {
       content.innerHTML = errorHtml('procurement', e)
     }
@@ -1605,7 +2052,7 @@
       }
       $('#add-partner-btn').addEventListener('click', () => openPartnerForm())
 
-      gsap.from('#main-content .grid > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.06 })
+      animateIn('#main-content .grid > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.06 })
     } catch (e) {
       content.innerHTML = errorHtml('partners', e)
     }
@@ -1635,11 +2082,12 @@
   // ── LLM SYNTHESIS ────────────────────────────────────────
   async function renderSupervisorAIView() {
     const content = $('#main-content')
-    const [{ data: cfg }, { data: rooms }] = await Promise.all([API.get('/supervisor/llm/config'), API.get('/space/rooms')])
-    content.innerHTML = `<div class="space-y-6"><div class="flex items-start justify-between gap-3"><div><h2 class="text-xl font-bold">Supervisor AI Advisory</h2><p class="text-sm text-slate-400">Review the current plan through safety, operability, and human-workflow lenses. Outputs require qualified review.</p></div><button id="sup-report" class="text-xs px-3 py-2 rounded-lg bg-slate-700/60 border border-slate-700 text-slate-300"><i class="fas fa-file-export mr-1"></i>Generate report</button></div><div class="grid lg:grid-cols-[1fr_1.2fr] gap-5"><div class="glass-card rounded-2xl p-5 space-y-4"><div class="flex items-center justify-between"><h3 class="font-semibold"><i class="fas fa-route text-cyan-400 mr-2"></i>LLM adapter &amp; token router</h3><span class="text-[11px] text-cyan-300">Supervisor only</span></div><p class="text-xs text-slate-500">Settings persist for the Supervisor role. The token is never returned after save.</p><input id="sup-provider" value="${cfg.provider || 'openai'}" placeholder="Provider" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"><input id="sup-base-url" value="${cfg.base_url || ''}" placeholder="Base URL" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"><input id="sup-model" value="${cfg.model || ''}" placeholder="Model" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"><input id="sup-token" type="password" placeholder="Paste token to change (leave blank to keep current)" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"><div><label class="text-xs text-slate-400">Max output tokens</label><input id="sup-budget" type="number" min="256" max="16000" value="${cfg.token_budget || 2000}" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm mt-1 text-slate-100"></div><button id="sup-save" class="w-full bg-slate-700/60 hover:bg-slate-600 border border-slate-700 text-slate-200 py-2.5 rounded-xl text-sm">Save adapter settings</button></div><div class="glass-card rounded-2xl p-5 space-y-4"><h3 class="font-semibold"><i class="fas fa-search-plus text-indigo-400 mr-2"></i>Analyze a plan</h3><select id="sup-room" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"><option value="">All room context</option>${rooms.map(r => `<option value="${r.id}">${r.name} · ${r.campus}</option>`).join('')}</select><textarea id="sup-prompt" rows="4" placeholder="Ask about chimney/exhaust, pathways, ergonomics, clearance, power, fire access, or another concern…" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"></textarea><input id="sup-source" placeholder="Optional product specs URL, PDF, or image URL" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"><button id="sup-analyze" class="w-full bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white py-2.5 rounded-xl text-sm font-medium btn-glow"><i class="fas fa-robot mr-2"></i>Run supervisor review</button><div id="sup-results" class="space-y-3"></div></div></div></div>`
-    $('#sup-report').onclick = async () => { await API.post('/supervisor/advisories/report'); toast('Supervisor report generated. View it in Reports.', 'success') }
+    const [{ data: vaultKeys }, { data: rooms }] = await Promise.all([API.get('/vault/keys'), API.get('/space/rooms')])
+    const activeKey = vaultKeys.find(k => k.is_active)
+    content.innerHTML = `<div class="space-y-6"><div class="flex items-start justify-between gap-3"><div><h2 class="text-xl font-bold">Supervisor AI Advisory</h2><p class="text-sm text-slate-400">Review the current plan through safety, operability, and human-workflow lenses. Outputs require qualified review.</p></div><button id="sup-report" class="text-xs px-3 py-2 rounded-lg bg-slate-700/60 border border-slate-700 text-slate-300"><i class="fas fa-file-export mr-1"></i>Generate report</button></div><div class="grid lg:grid-cols-[1fr_1.2fr] gap-5"><div class="glass-card rounded-2xl p-5 space-y-4"><div class="flex items-center justify-between"><h3 class="font-semibold"><i class="fas fa-vault text-cyan-400 mr-2"></i>Unified API Vault</h3><span class="text-[11px] text-cyan-300">Shared</span></div><p class="text-xs text-slate-500">Supervisor AI runs on the same vaulted kie.ai key as Report Creator, GenAI, Spatial Copilot and Whiteboard AI. The key is server-side only and never returned after save.</p><div class="bg-slate-800/60 border border-slate-700/40 rounded-xl p-3 text-xs">${activeKey ? `<span class="text-emerald-400"><i class="fas fa-check-circle mr-1"></i>Vault key active</span> <span class="font-mono text-slate-500">${activeKey.key_preview}</span><span class="text-slate-600"> · ${activeKey.model}</span>` : '<span class="text-amber-400"><i class="fas fa-exclamation-triangle mr-1"></i>No key in vault — analyses will return metrics-only guidance.</span>'}</div><button id="sup-vault" class="w-full bg-slate-700/60 hover:bg-slate-600 border border-slate-700 text-slate-200 py-2.5 rounded-xl text-sm"><i class="fas fa-key mr-1"></i>Open API Vault</button><p class="text-[11px] text-slate-500">Max output tokens default to 2000 per call; advisories are advisory-only and require qualified review.</p></div><div class="glass-card rounded-2xl p-5 space-y-4"><h3 class="font-semibold"><i class="fas fa-search-plus text-indigo-400 mr-2"></i>Analyze a plan</h3><select id="sup-room" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"><option value="">All room context</option>${rooms.map(r => `<option value="${r.id}">${r.name} · ${r.campus}</option>`).join('')}</select><textarea id="sup-prompt" rows="4" placeholder="Ask about chimney/exhaust, pathways, ergonomics, clearance, power, fire access, or another concern…" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"></textarea><input id="sup-source" placeholder="Optional product specs URL, PDF, or image URL" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100"><button id="sup-analyze" class="w-full bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white py-2.5 rounded-xl text-sm font-medium btn-glow"><i class="fas fa-robot mr-2"></i>Run supervisor review</button><div id="sup-results" class="space-y-3"></div></div></div></div>`
+    $('#sup-report').onclick = async () => { const { data } = await API.post('/supervisor/advisories/report'); if (data.share_token) { const url = window.location.origin + '/#share/' + data.share_token; await navigator.clipboard.writeText(url); toast('Advisory report generated — shareable link copied!', 'success') } else toast('Report generated', 'success') }
     const validateButton = document.createElement('button'); validateButton.className = 'w-full text-xs px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300'; validateButton.innerHTML = '<i class="fas fa-ruler-combined mr-1"></i>Run placement & safety checks'; $('#sup-analyze').parentNode.insertBefore(validateButton, $('#sup-analyze')); validateButton.onclick = async () => { if (!$('#sup-room').value) return toast('Select a room first', 'error'); const { data } = await API.post('/supervisor/planner/validate', { room_id: $('#sup-room').value }); $('#sup-results').innerHTML = (data.findings || []).map(f => `<div class="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3"><div class="flex justify-between"><span class="font-medium text-sm">${f.title}</span><span class="text-[10px] uppercase text-amber-300">${f.severity}</span></div><p class="text-xs text-slate-300 mt-2">${f.advisory}</p></div>`).join('') || '<p class="text-sm text-emerald-400">No rule-based conflicts found. Verify against site measurements and manufacturer instructions.</p>'; toast(`${data.findings?.length || 0} planner findings recorded`, 'info') }
-    $('#sup-save').onclick = async () => { await API.put('/supervisor/llm/config', { provider: $('#sup-provider').value, base_url: $('#sup-base-url').value, model: $('#sup-model').value, api_token: $('#sup-token').value, token_budget: Number($('#sup-budget').value) }); toast('Supervisor adapter saved', 'success') }
+    $('#sup-vault').onclick = () => openApiVaultModal(vaultKeys)
     $('#sup-analyze').onclick = async () => { const btn = $('#sup-analyze'); btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner animate-spin mr-2"></i>Reviewing…'; try { const { data } = await API.post('/supervisor/advisories/analyze', { room_id: $('#sup-room').value || null, prompt: $('#sup-prompt').value, source_material: $('#sup-source').value }); const results = $('#sup-results'); results.innerHTML = (data.advisories || []).map((a, i) => `<div class="rounded-xl border ${a.severity === 'critical' || a.severity === 'high' ? 'border-red-500/30 bg-red-500/5' : 'border-slate-700/70 bg-slate-800/40'} p-3"><div class="flex items-center justify-between"><span class="font-medium text-sm">${a.title}</span><span class="text-[10px] uppercase tracking-wider text-amber-300">${a.severity}</span></div><p class="text-xs text-slate-300 mt-2">${a.advisory}</p><button class="sup-push mt-3 text-xs px-3 py-1.5 rounded-lg bg-indigo-500/15 border border-indigo-500/30 text-indigo-300" data-id="${data.ids?.[i] || ''}">Push to CoE bulletin</button></div>`).join('') || '<p class="text-sm text-slate-500">No advisory returned.</p>'; $$('.sup-push').forEach(b => b.onclick = async () => { await API.post(`/supervisor/advisories/${b.dataset.id}/push`); b.textContent = 'Pushed to CoE bulletin'; b.disabled = true; toast('Advisory pushed to CoE leader', 'success') }) } catch (e) { toast(e.response?.data?.error || e.message, 'error') } btn.disabled = false; btn.innerHTML = '<i class="fas fa-robot mr-2"></i>Run supervisor review' }
   }
 
@@ -1687,14 +2135,21 @@
 
   async function renderLLMView() {
     const content = $('#main-content')
+    const { data: keys } = await API.get('/vault/keys')
+    const activeKey = keys.find(k => k.is_active)
     content.innerHTML = `
       <div class="space-y-6">
-        <div><h2 class="text-xl font-bold">GenAI Report Synthesis</h2><p class="text-sm text-slate-400">LLM-powered strategic synthesis — Venture Owner Tool</p></div>
-        <div class="glass-card rounded-2xl p-6">
-          <div class="mb-4">
-            <label class="text-sm font-medium text-slate-400">OpenAI API Key <span class="text-amber-400 text-xs">(session only)</span></label>
-            <input id="llm-api-key" type="password" value="${state.llmApiKey || ''}" placeholder="sk-..." class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-4 py-3 text-sm mt-1 font-mono text-slate-100 placeholder-slate-500">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div><h2 class="text-xl font-bold">GenAI Report Synthesis</h2><p class="text-sm text-slate-400">LLM-powered strategic synthesis — Venture Owner Tool</p></div>
+          <div class="flex items-center gap-2 text-xs">
+            <span class="hud-chip rounded-lg px-3 py-1.5 flex items-center gap-2">
+              <i class="fas fa-key ${activeKey ? 'text-emerald-400' : 'text-amber-400'}"></i>
+              <span>${activeKey ? `Vault key active <span class="font-mono text-slate-500">${activeKey.key_preview}</span> · ${activeKey.model}` : 'No API key in vault'}</span>
+            </span>
+            <button id="llm-vault-btn" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-3 py-2 rounded-xl text-sm transition"><i class="fas fa-vault mr-1"></i>API Vault</button>
           </div>
+        </div>
+        <div class="glass-card rounded-2xl p-6">
           <div class="mb-4">
             <label class="text-sm font-medium text-slate-400">Report Type</label>
             <select id="llm-report-type" class="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-4 py-3 text-sm mt-1 text-slate-100">
@@ -1712,40 +2167,62 @@
           <button id="llm-generate-btn" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-6 py-3 rounded-xl font-medium transition btn-glow flex items-center gap-2">
             <i class="fas fa-robot"></i> Generate Synthesis
           </button>
+          <p class="text-[11px] text-slate-500 mt-3"><i class="fas fa-info-circle mr-1"></i>Uses the unified API Vault key (kie.ai Gemini) server-side — the key never touches the page.</p>
           <div id="llm-output" class="mt-6 hidden">
             <div class="flex items-center justify-between mb-3">
               <h3 class="font-semibold"><i class="fas fa-file-alt text-indigo-400 mr-2"></i>Synthesis Output</h3>
-              <button id="save-llm-report-btn" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-3 py-1.5 rounded-lg text-xs transition"><i class="fas fa-save mr-1"></i>Save as Report</button>
+              <div class="flex gap-2">
+                <button id="llm-pdf-btn" class="bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white px-3 py-1.5 rounded-lg text-xs transition font-medium"><i class="fas fa-file-pdf mr-1"></i>Export PDF</button>
+                <button id="save-llm-report-btn" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-3 py-1.5 rounded-lg text-xs transition"><i class="fas fa-save mr-1"></i>Save as Report</button>
+              </div>
             </div>
             <div id="llm-content" class="bg-slate-800/60 rounded-xl p-5 text-sm prose prose-invert max-h-96 overflow-y-auto whitespace-pre-wrap border border-slate-700/30"></div>
           </div>
         </div>
       </div>`
 
+    $('#llm-vault-btn').addEventListener('click', () => openApiVaultModal(keys))
     $('#llm-generate-btn').addEventListener('click', async () => {
-      const apiKey = $('#llm-api-key').value.trim()
-      if (!apiKey) return toast('Please enter your OpenAI API key.', 'error')
-      state.llmApiKey = apiKey
       const btn = $('#llm-generate-btn')
       btn.disabled = true
       btn.innerHTML = '<i class="fas fa-spinner animate-spin"></i> Generating...'
       try {
         const { data } = await API.post('/llm/synthesize', {
-          api_key: apiKey, prompt: $('#llm-prompt').value.trim(), report_type: $('#llm-report-type').value
+          prompt: $('#llm-prompt').value.trim(), report_type: $('#llm-report-type').value
         })
         const output = $('#llm-output')
         output.classList.remove('hidden')
         $('#llm-content').textContent = data.synthesis
-        gsap.from(output, { y: 20, opacity: 0, duration: 0.5 })
+        animateIn(output, { y: 20, opacity: 0, duration: 0.5 })
         $('#save-llm-report-btn').onclick = async () => {
           await API.post('/reports/saved', {
             title: `LLM ${$('#llm-report-type').value} — ${dayjs().format('YYYY-MM-DD HH:mm')}`,
             report_type: 'llm_synthesis', content: data.synthesis
           })
-          toast('Report saved! View in Reports → Saved.', 'success')
+          toast('Report saved!', 'success')
+        }
+        $('#llm-pdf-btn').onclick = () => {
+          const { jsPDF } = window.jspdf
+          if (!jsPDF) return toast('PDF library not loaded', 'error')
+          const doc = new jsPDF()
+          doc.setFontSize(15); doc.setTextColor(79, 70, 229)
+          doc.text(doc.splitTextToSize(`GenAI Synthesis — ${$('#llm-report-type').value}`, 180), 14, 18)
+          doc.setFontSize(9); doc.setTextColor(110)
+          doc.text(`SRM dROIds CoE · ${dayjs().format('DD MMM YYYY HH:mm')} · via kie.ai Gemini`, 14, 25)
+          doc.setDrawColor(79, 70, 229); doc.line(14, 28, 196, 28)
+          doc.setFontSize(10); doc.setTextColor(30)
+          let y = 35
+          doc.splitTextToSize($('#llm-content').textContent, 180).forEach(line => {
+            if (y > 282) { doc.addPage(); y = 18 }
+            doc.text(line, 14, y); y += 5.2
+          })
+          doc.save(`genai-synthesis-${dayjs().format('YYYY-MM-DD')}.pdf`)
+          toast('PDF downloaded', 'success')
         }
       } catch (e) {
-        toast('LLM synthesis failed: ' + (e.response?.data?.error || e.message), 'error')
+        const msg = e.response?.data?.error || e.message
+        toast('LLM synthesis failed: ' + msg, 'error')
+        if (e.response?.data?.needs_key) toast('Add a key in the API Vault (top-right) first', 'info')
       }
       btn.disabled = false
       btn.innerHTML = '<i class="fas fa-robot"></i> Generate Synthesis'
@@ -1803,7 +2280,7 @@
         })
       })
 
-      gsap.from('#main-content .glass-card', { y: 20, opacity: 0, duration: 0.4 })
+      animateIn('#main-content .glass-card', { y: 20, opacity: 0, duration: 0.4 })
     } catch (e) {
       content.innerHTML = errorHtml('admin', e)
     }
@@ -1961,8 +2438,8 @@
     if (addSecBtn) addSecBtn.addEventListener('click', () => openSectionForm(stage.id))
 
     wireSectionCards(isVenture)
-    gsap.from('#stage-stepper > button', { y: 20, opacity: 0, duration: 0.4, stagger: 0.06 })
-    gsap.from('#sections-area > div', { y: 30, opacity: 0, duration: 0.5, stagger: 0.1 })
+    animateIn('#stage-stepper > button', { y: 20, opacity: 0, duration: 0.4, stagger: 0.06 })
+    animateIn('#sections-area > div', { y: 30, opacity: 0, duration: 0.5, stagger: 0.1 })
   }
 
   function sectionCardHtml(sec, isVenture) {
@@ -2562,7 +3039,7 @@
         options: { responsive: true, scales: { x: { grid: { display: false }, ticks: { color: '#94a3b8' } }, y: { grid: { color: '#1e293b' }, ticks: { color: '#94a3b8' } } }, plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } } }
       })
     }
-    gsap.from('#analytics-strip > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.06 })
+    animateIn('#analytics-strip > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.06 })
   }
 
   // ── DECISION LOG ─────────────────────────────────────────
@@ -2597,7 +3074,7 @@
       </div>`
 
     $('#add-decision-btn').addEventListener('click', () => openDecisionForm(null, isVenture))
-    gsap.from('#decision-list > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.06 })
+    animateIn('#decision-list > div', { y: 20, opacity: 0, duration: 0.4, stagger: 0.06 })
   }
 
   function openDecisionForm(sectionId, isVenture) {
@@ -2661,6 +3138,512 @@
     } catch {
       root.innerHTML = '<div class="min-h-screen flex items-center justify-center"><div class="glass-card rounded-2xl p-10 text-center"><p class="text-red-400 text-xl mb-2">Error</p><p class="text-slate-500">Failed to load shared report.</p></div></div>'
     }
+  }
+
+  // ── COLLAB VIEW (v5) — shared whiteboard + meeting action tracker ──
+  const WB_COLORS = ['#f59e0b', '#6366f1', '#10b981', '#ef4444', '#0ea5e9', '#ec4899']
+  const AI_STATUS_COLORS = { backlog: 'text-slate-400', todo: 'text-amber-400', in_progress: 'text-sky-400', blocked: 'text-red-400', done: 'text-emerald-400' }
+  const AI_PRIORITY_COLORS = { low: 'bg-slate-700/50 text-slate-400', medium: 'bg-indigo-500/20 text-indigo-400', high: 'bg-amber-500/20 text-amber-400', urgent: 'bg-red-500/20 text-red-400' }
+
+  async function renderCollabView() {
+    const content = $('#main-content')
+    try {
+      content.innerHTML = `
+        <div class="space-y-6">
+          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div><h2 class="text-xl font-bold">Collaboration Hub</h2><p class="text-sm text-slate-400">Shared whiteboard &amp; meeting action tracker — visible to both CoE Director and Venture Owner</p></div>
+            <div class="flex gap-2">
+              <button id="collab-pdf-btn" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-4 py-2 rounded-xl text-sm font-medium transition"><i class="fas fa-file-pdf mr-1"></i>Export Board PDF</button>
+            </div>
+          </div>
+          <div class="flex gap-1 bg-slate-900/60 rounded-xl p-1 w-fit border border-slate-800">
+            <button class="collab-tab px-4 py-2 rounded-lg text-sm font-medium transition ${state.collabTab === 'board' ? 'bg-indigo-600/20 text-indigo-400' : 'text-slate-400 hover:text-slate-200'}" data-ct="board"><i class="fas fa-object-group mr-1.5"></i>Whiteboard</button>
+            <button class="collab-tab px-4 py-2 rounded-lg text-sm font-medium transition ${state.collabTab === 'actions' ? 'bg-indigo-600/20 text-indigo-400' : 'text-slate-400 hover:text-slate-200'}" data-ct="actions"><i class="fas fa-list-check mr-1.5"></i>Action Items</button>
+          </div>
+          <div id="collab-content-area"></div>
+        </div>`
+      $$('.collab-tab').forEach(b => b.addEventListener('click', () => { state.collabTab = b.dataset.ct; renderCollabView() }))
+      $('#collab-pdf-btn').addEventListener('click', () => exportWhiteboardPdf())
+      if (state.collabTab === 'actions') renderActionItems()
+      else renderWhiteboard()
+    } catch (e) { content.innerHTML = errorHtml('collaboration hub', e) }
+  }
+
+  // ── WHITEBOARD — shared sticky-note board with AI enhance ──
+  async function renderWhiteboard() {
+    const area = $('#collab-content-area')
+    const { data: notes } = await API.get('/whiteboard/notes')
+    area.innerHTML = `
+      <div class="space-y-3">
+        <div class="flex items-center gap-2 flex-wrap">
+          <button id="wb-add" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition btn-glow"><i class="fas fa-plus mr-1"></i>Add Note</button>
+          <div class="flex gap-1 items-center">${WB_COLORS.map(c => `<span class="wb-color w-6 h-6 rounded-lg cursor-pointer border-2 border-transparent hover:scale-110 transition" data-color="${c}" style="background:${c}"></span>`).join('')}</div>
+          <span class="text-xs text-slate-500 ml-auto"><i class="fas fa-arrows-alt mr-1"></i>Drag notes to arrange · double-click to edit · <i class="fas fa-wand-magic-sparkles"></i> = AI enhance</span>
+        </div>
+        <div id="wb-board" class="glass-card rounded-2xl relative overflow-hidden" style="height:560px;">
+          <div class="absolute inset-0 grid-pattern opacity-40"></div>
+          ${notes.length === 0 ? '<div class="absolute inset-0 flex items-center justify-center pointer-events-none"><div class="text-center"><i class="fas fa-chalkboard text-4xl text-indigo-400/40 mb-3"></i><p class="text-slate-400 font-medium">Shared whiteboard is empty</p><p class="text-xs text-slate-500 mt-1">Add a note — both roles see the same board in real time on refresh.</p></div></div>' : ''}
+        </div>
+      </div>`
+
+    const board = $('#wb-board')
+    let activeColor = WB_COLORS[0]
+    $$('.wb-color').forEach(s => s.addEventListener('click', () => {
+      activeColor = s.dataset.color
+      $$('.wb-color').forEach(x => x.classList.remove('border-white'))
+      s.classList.add('border-white')
+    }))
+
+    notes.forEach(n => board.appendChild(buildNoteEl(n)))
+
+    $('#wb-add').addEventListener('click', async () => {
+      const { data } = await API.post('/whiteboard/notes', {
+        author_role: state.role, text: 'New note…', color: activeColor,
+        x: 40 + Math.random() * 120, y: 40 + Math.random() * 100
+      })
+      board.appendChild(buildNoteEl({ id: data.id, author_role: state.role, text: 'New note…', color: activeColor, x: 60, y: 60, w: 220, h: 160, ai_enhanced: 0 }))
+      toast('Note added — drag it into place', 'success')
+    })
+
+    function buildNoteEl(n) {
+      const el = document.createElement('div')
+      el.className = 'wb-note'
+      el.style.cssText = `left:${n.x}px;top:${n.y}px;width:${n.w}px;height:${n.h}px;background:${n.color}22;border:1px solid ${n.color}66;`
+      el.innerHTML = `
+        <div class="flex items-center justify-between px-2.5 py-1.5 border-b" style="border-color:${n.color}44;background:${n.color}18;">
+          <span class="text-[10px] font-semibold uppercase tracking-wider" style="color:${n.color}">${n.author_role === 'venture_owner' ? 'Venture' : 'CoE'}${n.ai_enhanced ? ' · ✦AI' : ''}</span>
+          <div class="flex gap-1">
+            <button class="wb-ai text-[10px] px-1.5 py-0.5 rounded hover:bg-white/10 transition" title="Enhance with AI"><i class="fas fa-wand-magic-sparkles" style="color:${n.color}"></i></button>
+            <button class="wb-del text-[10px] px-1.5 py-0.5 rounded hover:bg-white/10 transition" title="Delete"><i class="fas fa-times text-slate-500"></i></button>
+          </div>
+        </div>
+        <div class="wb-text flex-1 px-2.5 py-2 text-xs text-slate-200 overflow-y-auto whitespace-pre-wrap" contenteditable="false">${n.text}</div>`
+      // drag
+      el.addEventListener('mousedown', (e) => {
+        if (e.target.closest('button') || el.querySelector('[contenteditable="true"]')) return
+        const sx = e.clientX - n.x, sy = e.clientY - n.y
+        const move = (ev) => {
+          n.x = Math.max(0, Math.min(board.clientWidth - n.w, ev.clientX - sx))
+          n.y = Math.max(0, Math.min(board.clientHeight - n.h, ev.clientY - sy))
+          el.style.left = n.x + 'px'; el.style.top = n.y + 'px'
+        }
+        const up = async () => {
+          window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up)
+          await API.put(`/whiteboard/notes/${n.id}`, { x: Math.round(n.x), y: Math.round(n.y) })
+        }
+        window.addEventListener('mousemove', move); window.addEventListener('mouseup', up)
+      })
+      // edit on dblclick
+      const txt = el.querySelector('.wb-text')
+      el.addEventListener('dblclick', () => {
+        txt.contentEditable = 'true'; txt.focus()
+        txt.addEventListener('blur', async () => {
+          txt.contentEditable = 'false'
+          if (txt.textContent !== n.text) { n.text = txt.textContent; await API.put(`/whiteboard/notes/${n.id}`, { text: n.text }) ; toast('Note saved', 'success') }
+        }, { once: true })
+      })
+      // AI enhance
+      el.querySelector('.wb-ai').addEventListener('click', async () => {
+        const btn = el.querySelector('.wb-ai')
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'
+        try {
+          const { data } = await API.post('/llm/chat', {
+            role: state.role,
+            messages: [
+              { role: 'system', content: 'You are a CoE setup copilot. Rewrite the whiteboard note into a crisp, structured action note (≤5 bullet points or a 2-line summary). Keep it concrete for a drone Centre of Excellence build-out.' },
+              { role: 'user', content: n.text }
+            ]
+          })
+          if (data.ok) {
+            n.text = data.content; txt.textContent = data.content
+            await API.put(`/whiteboard/notes/${n.id}`, { text: n.text, ai_enhanced: 1 })
+            toast('Note enhanced by AI', 'success')
+            renderWhiteboard()
+          } else toast(data.error || 'AI enhance failed', 'error')
+        } catch (err) { toast(err.response?.data?.error || 'AI enhance failed — check API vault key', 'error') }
+        btn.innerHTML = `<i class="fas fa-wand-magic-sparkles" style="color:${n.color}"></i>`
+      })
+      // delete
+      el.querySelector('.wb-del').addEventListener('click', async () => {
+        await API.delete(`/whiteboard/notes/${n.id}`); el.remove(); toast('Note removed', 'success')
+      })
+      return el
+    }
+  }
+
+  function exportWhiteboardPdf() {
+    const { jsPDF } = window.jspdf
+    if (!jsPDF) return toast('PDF library not loaded', 'error')
+    API.get('/whiteboard/notes').then(({ data: notes }) => {
+      const doc = new jsPDF()
+      doc.setFontSize(18); doc.setTextColor(99, 102, 241)
+      doc.text('SRM dROIds CoE — Shared Whiteboard', 14, 20)
+      doc.setFontSize(10); doc.setTextColor(100)
+      doc.text(`Exported ${dayjs().format('DD MMM YYYY HH:mm')} · ${notes.length} notes`, 14, 28)
+      let y = 40
+      notes.forEach((n, i) => {
+        if (y > 270) { doc.addPage(); y = 20 }
+        doc.setDrawColor(99, 102, 241); doc.setFillColor(245, 246, 255)
+        doc.roundedRect(14, y, 180, 30, 2, 2, 'FD')
+        doc.setFontSize(9); doc.setTextColor(120)
+        doc.text(`${n.author_role === 'venture_owner' ? 'Venture Owner' : 'CoE Director'}${n.ai_enhanced ? ' · AI-enhanced' : ''}`, 18, y + 6)
+        doc.setFontSize(10); doc.setTextColor(30)
+        doc.text(doc.splitTextToSize(n.text, 172), 18, y + 13)
+        y += 38
+      })
+      doc.save(`whiteboard-${dayjs().format('YYYY-MM-DD')}.pdf`)
+      toast('Whiteboard exported as PDF', 'success')
+    })
+  }
+
+  // ── MEETING ACTION TRACKER — Jira-lite for CoE setup ────
+  async function renderActionItems() {
+    const area = $('#collab-content-area')
+    const { data } = await API.get('/action-items')
+    const cols = ['todo', 'in_progress', 'blocked', 'done']
+    area.innerHTML = `
+      <div class="space-y-4">
+        <div class="flex items-center gap-2 flex-wrap">
+          <button id="ai-add" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition btn-glow"><i class="fas fa-plus mr-1"></i>Log Action Item</button>
+          <button id="ai-extract" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-4 py-2 rounded-xl text-sm transition"><i class="fas fa-wand-magic-sparkles mr-1"></i>Extract from Meeting Notes (AI)</button>
+          ${data.meetings.length ? `<select id="ai-meeting-filter" class="bg-slate-700/50 border border-slate-600 rounded-xl px-3 py-2 text-sm text-slate-200"><option value="">All meetings</option>${data.meetings.map(m => `<option value="${m.meeting_title}">${m.meeting_title}${m.meeting_date ? ' · ' + m.meeting_date : ''}</option>`).join('')}</select>` : ''}
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          ${cols.map(c => `
+            <div class="glass-card rounded-xl p-3 min-h-[200px]">
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-bold uppercase tracking-wider ${AI_STATUS_COLORS[c]}">${c.replace(/_/g, ' ')}</span>
+                <span class="text-xs text-slate-500">${data.items.filter(i => i.status === c).length}</span>
+              </div>
+              <div class="space-y-2">
+                ${data.items.filter(i => i.status === c).map(i => `
+                  <div class="bg-slate-800/60 border border-slate-700/40 rounded-lg p-2.5 text-xs hover:border-indigo-500/40 transition cursor-pointer ai-card" data-id="${i.id}">
+                    <div class="flex items-start justify-between gap-1 mb-1">
+                      <span class="font-semibold text-slate-200 flex-1">${i.title}</span>
+                      <span class="px-1.5 py-0.5 rounded ${AI_PRIORITY_COLORS[i.priority]}">${i.priority}</span>
+                    </div>
+                    ${i.description ? `<p class="text-slate-500 mb-1 line-clamp-2">${i.description}</p>` : ''}
+                    <div class="flex items-center justify-between text-slate-500">
+                      <span><i class="fas fa-user mr-0.5"></i>${i.owner === 'venture_owner' ? 'Venture' : 'CoE'}</span>
+                      ${i.due_date ? `<span><i class="fas fa-calendar mr-0.5"></i>${i.due_date}</span>` : ''}
+                    </div>
+                    <div class="text-slate-600 mt-0.5 italic">${i.meeting_title}</div>
+                  </div>`).join('') || '<p class="text-slate-600 text-xs text-center py-4">No items</p>'}
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>`
+
+    $('#ai-add').addEventListener('click', () => openActionItemForm())
+    $('#ai-meeting-filter')?.addEventListener('change', (e) => {
+      const sel = e.target.value
+      $$('.ai-card').forEach(card => {
+        const item = data.items.find(i => i.id === Number(card.dataset.id))
+        card.style.display = (!sel || item?.meeting_title === sel) ? '' : 'none'
+      })
+    })
+    $('#ai-extract').addEventListener('click', openActionExtractModal)
+    $$('.ai-card').forEach(card => card.addEventListener('click', () => openActionItemForm(data.items.find(i => i.id === Number(card.dataset.id)))))
+  }
+
+  function openActionItemForm(item) {
+    showModal(`
+      <form id="ai-form" class="space-y-4 text-left">
+        <h3 class="text-lg font-bold"><i class="fas fa-list-check text-indigo-400 mr-2"></i>${item ? 'Edit Action Item' : 'Log Action Item'}</h3>
+        <div><label class="text-xs text-slate-400">Title <span class="text-amber-400">*</span></label><input name="title" required value="${item?.title || ''}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100" placeholder="e.g., Confirm 3-phase power for fabrication lab"></div>
+        <div><label class="text-xs text-slate-400">Description</label><textarea name="description" rows="2" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">${item?.description || ''}</textarea></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="text-xs text-slate-400">Meeting <span class="text-amber-400">*</span></label><input name="meeting_title" required value="${item?.meeting_title || ''}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100" placeholder="e.g., Weekly Setup Sync"></div>
+          <div><label class="text-xs text-slate-400">Meeting Date</label><input name="meeting_date" type="date" value="${item?.meeting_date || dayjs().format('YYYY-MM-DD')}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          <div><label class="text-xs text-slate-400">Owner</label><select name="owner" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">
+            <option value="coe_leader" ${item?.owner === 'coe_leader' ? 'selected' : ''}>CoE Director</option>
+            <option value="venture_owner" ${item?.owner === 'venture_owner' ? 'selected' : ''}>Venture Owner</option>
+          </select></div>
+          <div><label class="text-xs text-slate-400">Priority</label><select name="priority" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">
+            ${['low', 'medium', 'high', 'urgent'].map(p => `<option value="${p}" ${item?.priority === p ? 'selected' : ''}>${p}</option>`).join('')}
+          </select></div>
+          <div><label class="text-xs text-slate-400">Due Date</label><input name="due_date" type="date" value="${item?.due_date || ''}" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100"></div>
+        </div>
+        <div><label class="text-xs text-slate-400">Status</label><select name="status" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100">
+          ${['backlog', 'todo', 'in_progress', 'blocked', 'done'].map(s => `<option value="${s}" ${item?.status === s ? 'selected' : ''}>${s.replace(/_/g, ' ')}</option>`).join('')}
+        </select></div>
+        <div class="flex gap-2">
+          <button type="submit" class="flex-1 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow">${item ? 'Save' : 'Add Item'}</button>
+          ${item ? '<button type="button" id="ai-del" class="bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 px-4 py-2.5 rounded-lg text-sm transition"><i class="fas fa-trash"></i></button>' : ''}
+        </div>
+      </form>`)
+    const form = $('#ai-form')
+    $('#ai-del')?.addEventListener('click', async () => {
+      if (!confirm('Delete this action item?')) return
+      await API.delete(`/action-items/${item.id}`); toast('Deleted', 'success'); closeModal(); renderActionItems()
+    })
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const fd = new FormData(form)
+      const payload = { title: fd.get('title'), description: fd.get('description'), meeting_title: fd.get('meeting_title'), meeting_date: fd.get('meeting_date'), owner: fd.get('owner'), priority: fd.get('priority'), due_date: fd.get('due_date'), status: fd.get('status'), created_by: state.role }
+      if (item) { await API.put(`/action-items/${item.id}`, payload); toast('Updated', 'success') }
+      else { await API.post('/action-items', payload); toast('Action item logged', 'success') }
+      closeModal(); renderActionItems()
+    })
+  }
+
+  function openActionExtractModal() {
+    showModal(`
+      <form id="ai-extract-form" class="space-y-4 text-left">
+        <h3 class="text-lg font-bold"><i class="fas fa-wand-magic-sparkles text-indigo-400 mr-2"></i>Extract Action Items from Meeting Notes</h3>
+        <div><label class="text-xs text-slate-400">Meeting Title <span class="text-amber-400">*</span></label><input name="meeting_title" required class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100" placeholder="e.g., Steering Committee — 12 Sep"></div>
+        <div><label class="text-xs text-slate-400">Paste raw meeting notes / transcript</label><textarea name="notes" rows="8" required class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100" placeholder="Paste the discussion here — the AI will pull out concrete action items with owners and priorities…"></textarea></div>
+        <div id="ai-extract-status" class="hidden text-sm rounded-lg px-3 py-2"></div>
+        <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow"><i class="fas fa-magic mr-1"></i>Extract &amp; Create Items</button>
+      </form>`)
+    $('#ai-extract-form').addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const fd = new FormData(e.target)
+      const status = $('#ai-extract-status')
+      status.className = 'text-sm rounded-lg px-3 py-2 bg-indigo-500/15 text-indigo-300 border border-indigo-500/30'
+      status.textContent = 'AI is reading your notes…'
+      try {
+        const { data } = await API.post('/llm/chat', {
+          role: state.role,
+          messages: [
+            { role: 'system', content: 'Extract action items from the meeting notes. Return ONLY a JSON array, no markdown, each item: {"title": string, "description": string, "owner": "coe_leader"|"venture_owner", "priority": "low"|"medium"|"high"|"urgent", "due_date": "YYYY-MM-DD"|null}. Max 8 items.' },
+            { role: 'user', content: String(fd.get('notes')) }
+          ]
+        })
+        if (!data.ok) throw new Error(data.error || 'LLM failed')
+        let items = []
+        try { items = JSON.parse(data.content.replace(/```json|```/g, '').trim()) } catch { throw new Error('Could not parse AI output — try shorter notes') }
+        for (const it of items.slice(0, 8)) {
+          await API.post('/action-items', { ...it, meeting_title: fd.get('meeting_title'), meeting_date: dayjs().format('YYYY-MM-DD'), created_by: state.role })
+        }
+        status.className = 'text-sm rounded-lg px-3 py-2 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+        status.textContent = `Created ${items.length} action item(s)`
+        setTimeout(() => { closeModal(); renderActionItems() }, 900)
+      } catch (err) {
+        status.className = 'text-sm rounded-lg px-3 py-2 bg-red-500/15 text-red-400 border border-red-500/30'
+        status.textContent = err.response?.data?.error || err.message
+      }
+    })
+  }
+
+  // ── REPORT CREATOR (v5) — kie.ai copilot + PDF export ────
+  const RC_SOURCES = [
+    { id: 'kpis', label: 'KPI Scorecard', icon: 'fa-chart-line' },
+    { id: 'tracker', label: 'Setup Tracker (stages & line items)', icon: 'fa-layer-group' },
+    { id: 'procurement', label: 'Procurement Pipeline', icon: 'fa-truck' },
+    { id: 'actions', label: 'Meeting Action Items', icon: 'fa-list-check' },
+    { id: 'whiteboard', label: 'Whiteboard Notes', icon: 'fa-object-group' },
+    { id: 'roadmap', label: 'Roadmap Milestones', icon: 'fa-road' }
+  ]
+
+  async function renderReportCreator() {
+    const content = $('#main-content')
+    try {
+      const { data: keys } = await API.get('/vault/keys')
+      const myKey = keys.find(k => k.is_active) // unified vault — any active key powers all LLM features
+      content.innerHTML = `
+        <div class="space-y-6">
+          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div><h2 class="text-xl font-bold">Report Creator</h2><p class="text-sm text-slate-400">AI-assisted reporting — ingest any live data, get supervisory cues, export as PDF</p></div>
+            <div class="flex items-center gap-2 text-xs">
+              <span class="hud-chip rounded-lg px-3 py-1.5 flex items-center gap-2">
+                <i class="fas fa-key ${myKey ? 'text-emerald-400' : 'text-amber-400'}"></i>
+                <span>${myKey ? `Vault key active <span class="font-mono text-slate-500">${myKey.key_preview}</span>` : 'No API key in vault'}</span>
+              </span>
+              <button id="rc-vault-btn" class="bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-3 py-2 rounded-xl text-sm transition"><i class="fas fa-vault mr-1"></i>API Vault</button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
+            <div class="lg:col-span-2 space-y-4">
+              <div class="glass-card rounded-2xl p-5 space-y-3">
+                <h3 class="font-semibold text-sm"><i class="fas fa-database mr-1.5 text-indigo-400"></i>1 · Ingest Data Sources</h3>
+                ${RC_SOURCES.map(s => `
+                  <label class="flex items-center gap-3 bg-slate-800/50 hover:bg-slate-800 border border-slate-700/40 rounded-xl px-3 py-2.5 cursor-pointer transition">
+                    <input type="checkbox" class="rc-source accent-indigo-500" value="${s.id}" ${['kpis', 'tracker', 'actions'].includes(s.id) ? 'checked' : ''}>
+                    <i class="fas ${s.icon} text-indigo-400 text-xs"></i>
+                    <span class="text-sm">${s.label}</span>
+                  </label>`).join('')}
+              </div>
+              <div class="glass-card rounded-2xl p-5 space-y-3">
+                <h3 class="font-semibold text-sm"><i class="fas fa-pen mr-1.5 text-indigo-400"></i>2 · Directive</h3>
+                <input id="rc-title" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100" placeholder="Report title" value="CoE Operations Report — ${dayjs().format('DD MMM YYYY')}">
+                <textarea id="rc-prompt" rows="4" class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100" placeholder="What should the report focus on? e.g., Summarize setup progress, flag procurement risks, list follow-ups for the steering committee…"></textarea>
+                <button id="rc-generate" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-xl font-medium transition btn-glow"><i class="fas fa-wand-magic-sparkles mr-1"></i>3 · Generate with AI</button>
+                <p class="text-[11px] text-slate-500"><i class="fas fa-info-circle mr-1"></i>Uses your vaulted kie.ai key (Gemini) server-side. The key never touches the page.</p>
+              </div>
+            </div>
+
+            <div class="lg:col-span-3 space-y-4">
+              <div class="glass-card rounded-2xl p-5 min-h-[420px] flex flex-col">
+                <div class="flex items-center justify-between mb-3">
+                  <h3 class="font-semibold text-sm"><i class="fas fa-file-lines mr-1.5 text-cyan-400"></i>Draft Report</h3>
+                  <div class="flex gap-2">
+                    <button id="rc-copy" class="text-xs bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-3 py-1.5 rounded-lg transition"><i class="fas fa-copy mr-1"></i>Copy</button>
+                    <button id="rc-pdf" class="text-xs bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white px-3 py-1.5 rounded-lg transition font-medium"><i class="fas fa-file-pdf mr-1"></i>Export PDF</button>
+                  </div>
+                </div>
+                <div id="rc-output" class="flex-1 bg-slate-800/50 border border-slate-700/40 rounded-xl p-4 text-sm text-slate-200 whitespace-pre-wrap overflow-y-auto" style="max-height:480px;">Your generated report will appear here. Select sources, add a directive, then Generate.</div>
+              </div>
+              <div class="glass-card rounded-2xl p-5">
+                <h3 class="font-semibold text-sm mb-3"><i class="fas fa-gauge-high mr-1.5 text-amber-400"></i>Supervisory Cues <span class="text-xs text-slate-500 font-normal">— operational radar from live data</span></h3>
+                <div id="rc-cues" class="space-y-2 text-sm"><p class="text-slate-500 text-xs">Generate a report to compute cues, or click refresh.</p></div>
+                <button id="rc-cues-refresh" class="mt-3 text-xs bg-slate-700/50 hover:bg-slate-600 border border-slate-700 text-slate-300 px-3 py-1.5 rounded-lg transition"><i class="fas fa-rotate mr-1"></i>Refresh Cues</button>
+              </div>
+            </div>
+          </div>
+        </div>`
+
+      $('#rc-vault-btn').addEventListener('click', () => openApiVaultModal(keys))
+      $('#rc-generate').addEventListener('click', generateAiReport)
+      $('#rc-cues-refresh').addEventListener('click', loadSupervisoryCues)
+      $('#rc-copy').addEventListener('click', async () => {
+        await navigator.clipboard.writeText($('#rc-output').textContent)
+        toast('Report copied to clipboard', 'success')
+      })
+      $('#rc-pdf').addEventListener('click', () => exportReportPdf())
+      loadSupervisoryCues()
+    } catch (e) { content.innerHTML = errorHtml('report creator', e) }
+  }
+
+  function openApiVaultModal(keys) {
+    const myKey = keys.find(k => k.is_active) // unified vault — single key powers every LLM feature
+    const roleLabel = state.role === 'venture_owner' ? 'Venture Owner' : state.role === 'supervisor' ? 'Supervisor' : 'CoE Director'
+    showModal(`
+      <form id="vault-form" class="space-y-4 text-left">
+        <h3 class="text-lg font-bold"><i class="fas fa-vault text-indigo-400 mr-2"></i>API Vault — Unified LLM Key</h3>
+        <div class="bg-slate-800/60 border border-slate-700/40 rounded-xl p-3 text-xs space-y-1">
+          <p><span class="text-slate-500">Provider:</span> <span class="text-slate-200">kie.ai (OpenAI-compatible)</span></p>
+          <p><span class="text-slate-500">Endpoint:</span> <span class="text-slate-200 font-mono text-[11px]">https://api.kie.ai/gemini-3-8-flash-openai/v1/chat/completions</span></p>
+          <p><span class="text-slate-500">Model:</span> <span class="text-slate-200">gemini-3-8-flash</span></p>
+          <p class="text-slate-500">Powers: <span class="text-cyan-300">Report Creator · GenAI Synthesis · Spatial Copilot · Supervisor AI · Whiteboard AI</span></p>
+          ${myKey ? `<p><span class="text-slate-500">Active key:</span> <span class="text-emerald-400 font-mono">${myKey.key_preview}</span> <span class="text-slate-600">(updated ${myKey.updated_at})</span></p>` : '<p class="text-amber-400">No key stored yet — save one below.</p>'}
+        </div>
+        <div>
+          <label class="text-xs text-slate-400">${myKey ? 'Replace API Key' : 'API Key'} <span class="text-amber-400">*</span> <span class="text-slate-500">(saved for ${roleLabel})</span></label>
+          <input name="api_key" type="password" required class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm mt-1 text-slate-100" placeholder="Paste your kie.ai API key">
+          <p class="text-[11px] text-slate-500 mt-1"><i class="fas fa-lock mr-1"></i>Stored server-side in the vault table, shown only masked. Get a key at kie.ai.</p>
+        </div>
+        <button type="submit" class="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-lg font-medium transition btn-glow"><i class="fas fa-save mr-1"></i>Save to Vault</button>
+      </form>`)
+    $('#vault-form').addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const api_key = new FormData(e.target).get('api_key')
+      await API.post('/vault/keys', { role: state.role, api_key })
+      toast('API key stored in vault', 'success')
+      closeModal(); renderReportCreator()
+    })
+  }
+
+  async function gatherReportContext(selected) {
+    const parts = []
+    if (selected.includes('kpis')) {
+      const { data } = await API.get('/kpis/scorecard')
+      parts.push('KPI SCORECARD:\n' + JSON.stringify(data).slice(0, 4000))
+    }
+    if (selected.includes('tracker')) {
+      const { data } = await API.get('/tracker/analytics')
+      parts.push('SETUP TRACKER ANALYTICS:\n' + JSON.stringify(data).slice(0, 4000))
+    }
+    if (selected.includes('procurement')) {
+      const { data } = await API.get('/procurement')
+      parts.push('PROCUREMENT:\n' + JSON.stringify(data).slice(0, 3000))
+    }
+    if (selected.includes('actions')) {
+      const { data } = await API.get('/action-items')
+      parts.push('MEETING ACTION ITEMS:\n' + JSON.stringify(data.items).slice(0, 3000))
+    }
+    if (selected.includes('whiteboard')) {
+      const { data } = await API.get('/whiteboard/notes')
+      parts.push('WHITEBOARD NOTES:\n' + data.map(n => `- [${n.author_role}] ${n.text}`).join('\n').slice(0, 3000))
+    }
+    if (selected.includes('roadmap')) {
+      const { data } = await API.get('/roadmap')
+      parts.push('ROADMAP:\n' + JSON.stringify(data).slice(0, 2500))
+    }
+    return parts.join('\n\n')
+  }
+
+  async function generateAiReport() {
+    const out = $('#rc-output')
+    const selected = Array.from($$('.rc-source:checked')).map(c => c.value)
+    if (!selected.length) return toast('Select at least one data source', 'error')
+    out.innerHTML = '<div class="flex items-center gap-2 text-slate-400"><div class="w-4 h-4 border-2 border-indigo-500/30 border-t-indigo-400 rounded-full animate-spin"></div>Ingesting data &amp; generating with Gemini (kie.ai)…</div>'
+    try {
+      const context = await gatherReportContext(selected)
+      const directive = $('#rc-prompt').value.trim() || 'Produce a concise, executive-grade operations report.'
+      const { data } = await API.post('/llm/chat', {
+        role: state.role,
+        temperature: 0.4,
+        messages: [
+          { role: 'system', content: 'You are the supervisory copilot for SRM dROIds, a dual-campus drone Centre of Excellence. Write a structured report with clear sections: Executive Summary, Progress Highlights, Risks & Blockers, Follow-ups Required (with suggested owner: CoE Director or Venture Owner), and Next-Step Recommendations. Be specific — cite numbers from the data. Use plain text with section headers in CAPS.' },
+          { role: 'user', content: `DIRECTIVE: ${directive}\n\nLIVE DATA:\n${context}` }
+        ]
+      })
+      if (!data.ok) throw new Error(data.error || 'Generation failed')
+      out.textContent = data.content
+      toast('Report generated', 'success')
+      loadSupervisoryCues()
+    } catch (err) {
+      const msg = err.response?.data?.error || err.message
+      out.innerHTML = `<p class="text-red-400">${msg}</p>${(err.response?.data?.needs_key) ? '<p class="text-slate-500 text-xs mt-2">Open the API Vault (top-right) and save your kie.ai key first.</p>' : ''}`
+    }
+  }
+
+  async function loadSupervisoryCues() {
+    const box = $('#rc-cues')
+    if (!box) return
+    try {
+      const [trackerRes, actionsRes, procRes] = await Promise.all([
+        API.get('/tracker/analytics').catch(() => ({ data: null })),
+        API.get('/action-items').catch(() => ({ data: { items: [] } })),
+        API.get('/procurement').catch(() => ({ data: [] }))
+      ])
+      const cues = []
+      const items = actionsRes.data?.items || []
+      const overdue = items.filter(i => i.due_date && i.due_date < dayjs().format('YYYY-MM-DD') && i.status !== 'done')
+      const blocked = items.filter(i => i.status === 'blocked')
+      if (overdue.length) cues.push({ icon: 'fa-clock', color: 'text-red-400', text: `${overdue.length} action item(s) overdue — follow up with owners today.` })
+      if (blocked.length) cues.push({ icon: 'fa-ban', color: 'text-red-400', text: `${blocked.length} blocked item(s): ${blocked.slice(0, 2).map(b => b.title).join('; ')}` })
+      const an = trackerRes.data
+      if (an) {
+        if (an.pending_submissions > 0) cues.push({ icon: 'fa-clipboard-check', color: 'text-amber-400', text: `${an.pending_submissions} setup submission(s) awaiting review.` })
+        if (typeof an.overall_progress === 'number') cues.push({ icon: 'fa-chart-line', color: 'text-indigo-400', text: `Overall setup progress at ${an.overall_progress}% — pace check against the roadmap.` })
+      }
+      const proc = procRes.data || []
+      const pendingProc = proc.filter(p => ['requested', 'pending', 'approved'].includes(p.status))
+      if (pendingProc.length) cues.push({ icon: 'fa-truck', color: 'text-sky-400', text: `${pendingProc.length} procurement item(s) in pipeline — check vendor ETAs.` })
+      if (!cues.length) cues.push({ icon: 'fa-circle-check', color: 'text-emerald-400', text: 'No red flags detected in live data. Keep the cadence.' })
+      box.innerHTML = cues.map(c => `
+        <div class="flex items-start gap-2.5 bg-slate-800/50 border border-slate-700/40 rounded-xl px-3 py-2.5">
+          <i class="fas ${c.icon} ${c.color} mt-0.5"></i><span class="text-slate-300 text-xs leading-relaxed">${c.text}</span>
+        </div>`).join('')
+    } catch { box.innerHTML = '<p class="text-slate-500 text-xs">Cues unavailable right now.</p>' }
+  }
+
+  function exportReportPdf() {
+    const { jsPDF } = window.jspdf
+    if (!jsPDF) return toast('PDF library not loaded', 'error')
+    const text = $('#rc-output')?.textContent || ''
+    if (!text || text.startsWith('Your generated report')) return toast('Generate a report first', 'error')
+    const doc = new jsPDF()
+    const title = $('#rc-title')?.value || 'CoE Operations Report'
+    doc.setFontSize(16); doc.setTextColor(79, 70, 229)
+    doc.text(doc.splitTextToSize(title, 180), 14, 18)
+    doc.setFontSize(9); doc.setTextColor(110)
+    doc.text(`SRM dROIds CoE · Generated by ${state.role === 'venture_owner' ? 'Venture Owner' : 'CoE Director'} · ${dayjs().format('DD MMM YYYY HH:mm')} · via kie.ai Gemini`, 14, 26)
+    doc.setDrawColor(79, 70, 229); doc.line(14, 29, 196, 29)
+    doc.setFontSize(10); doc.setTextColor(30)
+    const lines = doc.splitTextToSize(text, 180)
+    let y = 36
+    lines.forEach(line => {
+      if (y > 282) { doc.addPage(); y = 18 }
+      doc.text(line, 14, y); y += 5.2
+    })
+    doc.save(`${title.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 60)}.pdf`)
+    toast('PDF downloaded', 'success')
   }
 
   // ── MODAL ────────────────────────────────────────────────

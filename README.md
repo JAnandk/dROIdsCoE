@@ -84,7 +84,20 @@
 - **Platform**: Cloudflare Workers for Platform (gsk-hosted-deploy)
 - **Status**: ✅ Active
 - **Tech Stack**: Hono + TypeScript + Vite + TailwindCSS + Chart.js + Three.js + GSAP + D1 SQLite
-- **Last Updated**: 2026-08-09 (v3 — Foundational Setup Tracker: stage-by-stage line-item tracker, best-practice tooltips, section submission/review workflow, analytics, decision log)
+- **Last Updated**: 2026-09-13 (v5 — Collaboration Hub, Report Creator, 3D landing, interactive Space Planner)
+
+## What's New in v5
+- **Facility for supervisors** — Venture Owner nav now includes the Facility view (zones map + Space Planner), previously director-only.
+- **Interactive Space Planner** — drag equipment across the floor (auto-clamped to room bounds, saves position), wheel-resize footprints on the selected item, hover quick-tips (footprint/height/position/status/notes), double-click to edit, selection ring, day/night-aware rendering at 1 unit = 1 ft.
+- **Landing page facelift** — Three.js drone-lifecycle showcase: parts assemble from a scattered blueprint through 7 phases (Blueprint → Discussion → Design → Manufacture → Test → Deploy → Impact) with orbiting camera, blueprint grid, ambient particles, phase chips, and an industry impact ticker (Agriculture, Mining, Ocean/River Erosion, Forest Inventory…).
+- **API Vault + Report Creator** — per-role kie.ai key vault (`api_vault_keys`, masked display, server-side only), `/api/llm/chat` proxy to `https://api.kie.ai/gemini-3-8-flash-openai/v1/chat/completions` (model `gemini-3-8-flash`), Report Creator with 6 toggleable live data sources (KPIs, setup tracker, procurement, action items, whiteboard, roadmap), directive prompt, supervisory cues (overdue/blocked items, pending submissions, pipeline warnings), and jsPDF export.
+- **Collaboration Hub** — shared whiteboard (sticky notes both roles can add/drag/edit/delete, ✦AI enhance via vaulted key, PDF export of the board) + Meeting Action Tracker (Jira-lite kanban: backlog/todo/in_progress/blocked/done, priorities, owners, due dates, per-meeting filter, AI extraction of action items from pasted meeting notes).
+- **PDF sharing** — export generated reports and the whiteboard as PDFs for external stakeholders.
+- **Floating-panel fixes** — modals/toasts forced above 3D canvases with opaque backgrounds; canvases pinned to z-index 0.
+- **Data safety** — migration 0005 is purely additive (`api_vault_keys`, `whiteboard_notes`, `meeting_action_items`); all v3/v4 data preserved.
+
+## What's New in v4
+- Dashboard visibility fixes (animateIn fallback, contrast, body CSS gradient layering), day/night theme toggle, email sharing via Resend (formatted HTML reports), Space Planner v1 (sqft rooms + square-footprint placements + 3D floor render).
 
 ## API Endpoints
 | Method | Path | Auth | Description |
