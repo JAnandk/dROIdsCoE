@@ -521,8 +521,12 @@ app.put('/api/roadmap/:id', async (c) => {
 // LLM SYNTHESIS (Venture Owner only)
 // ============================================================
 app.post('/api/llm/synthesize', async (c) => {
-  const { api_key, prompt, report_type } = await c.req.json()
-  if (!api_key) return c.json({ error: 'LLM API key required — stored in Venture Owner settings' }, 400)
+  const { prompt, report_type } = await c.req.json()
+  // v7: unified — key comes from the API vault (any active key), never from the client
+  const keyRow: any = await c.env.DB.prepare(
+    "SELECT * FROM api_vault_keys WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1"
+  ).first()
+  if (!keyRow) return c.json({ error: 'No API key in the vault. Add one in Report Creator → API Vault.', needs_key: true }, 400)
 
   // Build a rich context from all data
   const dailyRows = await c.env.DB.prepare('SELECT * FROM daily_updates ORDER BY report_date DESC LIMIT 7').all()
@@ -546,18 +550,18 @@ app.post('/api/llm/synthesize', async (c) => {
   }
 
   const systemPrompt = `You are the SRM dROIds CoE strategic synthesis engine. You serve the Venture Owner.
-Generate a concise, actionable ${report_type} synthesis based on the data provided.
+Generate a concise, actionable ${report_type || 'Executive Summary'} synthesis based on the data provided.
 Focus on: strategic decisions required, risks to flag, bottlenecks to unblock, partner opportunities, and monetization readiness.
 Format in markdown. Be direct and executive-level.
 
 Data context: ${JSON.stringify(context, null, 2)}`
 
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetch(`${String(keyRow.base_url).replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${api_key}` },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${keyRow.api_key}` },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: keyRow.model,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: prompt || 'Generate a synthesis report.' }
@@ -569,14 +573,14 @@ Data context: ${JSON.stringify(context, null, 2)}`
 
     if (!response.ok) {
       const err = await response.text()
-      return c.json({ error: `LLM API error: ${response.status} — ${err}` }, 502)
+      return c.json({ error: `LLM API error: ${response.status} — ${err.slice(0, 300)}` }, 502)
     }
 
     const data: any = await response.json()
     const synthesis = data.choices?.[0]?.message?.content || 'No synthesis generated.'
-    return c.json({ synthesis, model: data.model, usage: data.usage })
+    return c.json({ synthesis, model: data.model || keyRow.model, usage: data.usage })
   } catch (e: any) {
-    return c.json({ error: `LLM call failed: ${e.message}` }, 500)
+    return c.json({ error: `LLM request failed: ${e.message || 'network error'}` }, 502)
   }
 })
 
@@ -728,11 +732,15 @@ app.put('/api/submissions/report/:id', async (c) => {
 // Full tracker tree: stages → sections (with guidelines) → line items
 app.get('/api/tracker', async (c) => {
   const db = c.env.DB
+  const scope = c.req.query('campus')
+  const scoped = scope === 'ramapuram' || scope === 'trichy'
+  const scopeClause = scoped ? ` WHERE campus_scope IN (?, 'both')` : ''
+  const scopeBind = scoped ? [scope] : []
   const [stages, sections, guidelines, items] = await Promise.all([
-    db.prepare('SELECT * FROM setup_stages ORDER BY sort_order').all(),
-    db.prepare('SELECT * FROM setup_sections ORDER BY sort_order').all(),
-    db.prepare('SELECT * FROM setup_guidelines ORDER BY sort_order').all(),
-    db.prepare('SELECT * FROM setup_line_items ORDER BY sort_order, id').all()
+    scoped ? db.prepare(`SELECT * FROM setup_stages${scopeClause} ORDER BY sort_order`).bind(...scopeBind).all() : db.prepare('SELECT * FROM setup_stages ORDER BY sort_order').all(),
+    scoped ? db.prepare(`SELECT * FROM setup_sections${scopeClause} ORDER BY sort_order`).bind(...scopeBind).all() : db.prepare('SELECT * FROM setup_sections ORDER BY sort_order').all(),
+    scoped ? db.prepare(`SELECT * FROM setup_guidelines${scopeClause} ORDER BY sort_order`).bind(...scopeBind).all() : db.prepare('SELECT * FROM setup_guidelines ORDER BY sort_order').all(),
+    scoped ? db.prepare(`SELECT * FROM setup_line_items${scopeClause} ORDER BY sort_order, id`).bind(...scopeBind).all() : db.prepare('SELECT * FROM setup_line_items ORDER BY sort_order, id').all()
   ])
   const glBySection: Record<number, any[]> = {}
   for (const g of guidelines.results as any[]) {
@@ -820,22 +828,24 @@ app.get('/api/tracker/analytics', async (c) => {
 
 // ── Sections CRUD ──────────────────────────────────────────
 app.post('/api/tracker/sections', async (c) => {
-  const { stage_id, title, description, guideline_summary, owner_role, sort_order } = await c.req.json()
+  const { stage_id, title, description, guideline_summary, owner_role, sort_order, campus_scope, campus_locked } = await c.req.json()
   if (!stage_id || !title) return c.json({ error: 'stage_id and title required' }, 400)
   const r = await c.env.DB.prepare(
-    'INSERT INTO setup_sections (stage_id, title, description, guideline_summary, owner_role, sort_order) VALUES (?,?,?,?,?,?)'
-  ).bind(stage_id, title, description || '', guideline_summary || '', owner_role || 'coe_leader', sort_order || 99).run()
+    'INSERT INTO setup_sections (stage_id, title, description, guideline_summary, owner_role, sort_order, campus_scope, campus_locked) VALUES (?,?,?,?,?,?,?,?)'
+  ).bind(stage_id, title, description || '', guideline_summary || '', owner_role || 'coe_leader', sort_order || 99, campus_scope || 'both', campus_locked ? 1 : 0).run()
   return c.json({ ok: true, id: r.meta.last_row_id })
 })
 
 app.put('/api/tracker/sections/:id', async (c) => {
   const id = c.req.param('id')
   const b = await c.req.json()
+  const current: any = await c.env.DB.prepare('SELECT campus_scope, campus_locked FROM setup_sections WHERE id=?').bind(id).first()
+  if (current?.campus_locked && b.campus_scope && b.campus_scope !== current.campus_scope) return c.json({ error: 'This section campus is locked. Unlock it before changing scope.' }, 409)
   await c.env.DB.prepare(
     `UPDATE setup_sections SET title = COALESCE(?, title), description = COALESCE(?, description),
      guideline_summary = COALESCE(?, guideline_summary), status = COALESCE(?, status),
-     sort_order = COALESCE(?, sort_order), updated_at = datetime('now') WHERE id = ?`
-  ).bind(b.title ?? null, b.description ?? null, b.guideline_summary ?? null, b.status ?? null, b.sort_order ?? null, id).run()
+     sort_order = COALESCE(?, sort_order), campus_scope = COALESCE(?, campus_scope), campus_locked = COALESCE(?, campus_locked), updated_at = datetime('now') WHERE id = ?`
+  ).bind(b.title ?? null, b.description ?? null, b.guideline_summary ?? null, b.status ?? null, b.sort_order ?? null, b.campus_scope ?? null, b.campus_locked === undefined ? null : (b.campus_locked ? 1 : 0), id).run()
   return c.json({ ok: true })
 })
 
@@ -860,18 +870,20 @@ app.post('/api/tracker/items', async (c) => {
   if (!b.section_id || !b.item_name) return c.json({ error: 'section_id and item_name required' }, 400)
   const r = await c.env.DB.prepare(
     `INSERT INTO setup_line_items (section_id, item_name, description, stakeholder, quantity_notes, vendor,
-      priority, estimated_cost, actual_cost, progress_pct, status, action_item, due_date, notes, sort_order)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      priority, estimated_cost, actual_cost, progress_pct, status, action_item, due_date, notes, sort_order, campus_scope, campus_locked)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(b.section_id, b.item_name, b.description || '', b.stakeholder || '', b.quantity_notes || '',
     b.vendor || '', b.priority || 'medium', b.estimated_cost || 0, b.actual_cost || 0,
     b.progress_pct || 0, b.status || 'not_started', b.action_item || '', b.due_date || '', b.notes || '',
-    b.sort_order || 99).run()
+    b.sort_order || 99, b.campus_scope || 'both', b.campus_locked ? 1 : 0).run()
   return c.json({ ok: true, id: r.meta.last_row_id })
 })
 
 app.put('/api/tracker/items/:id', async (c) => {
   const id = c.req.param('id')
   const b = await c.req.json()
+  const current: any = await c.env.DB.prepare('SELECT campus_scope, campus_locked FROM setup_line_items WHERE id=?').bind(id).first()
+  if (current?.campus_locked && b.campus_scope && b.campus_scope !== current.campus_scope) return c.json({ error: 'This item campus is locked. Unlock it before changing scope.' }, 409)
   await c.env.DB.prepare(
     `UPDATE setup_line_items SET item_name = COALESCE(?, item_name), description = COALESCE(?, description),
      stakeholder = COALESCE(?, stakeholder), quantity_notes = COALESCE(?, quantity_notes),
@@ -880,11 +892,12 @@ app.put('/api/tracker/items/:id', async (c) => {
      progress_pct = COALESCE(?, progress_pct), status = COALESCE(?, status),
      action_item = COALESCE(?, action_item), due_date = COALESCE(?, due_date), notes = COALESCE(?, notes),
      review_status = COALESCE(?, review_status), reviewer_notes = COALESCE(?, reviewer_notes),
+     campus_scope = COALESCE(?, campus_scope), campus_locked = COALESCE(?, campus_locked),
      updated_at = datetime('now') WHERE id = ?`
   ).bind(b.item_name ?? null, b.description ?? null, b.stakeholder ?? null, b.quantity_notes ?? null,
     b.vendor ?? null, b.priority ?? null, b.estimated_cost ?? null, b.actual_cost ?? null,
     b.progress_pct ?? null, b.status ?? null, b.action_item ?? null, b.due_date ?? null, b.notes ?? null,
-    b.review_status ?? null, b.reviewer_notes ?? null, id).run()
+    b.review_status ?? null, b.reviewer_notes ?? null, b.campus_scope ?? null, b.campus_locked === undefined ? null : (b.campus_locked ? 1 : 0), id).run()
   return c.json({ ok: true })
 })
 
@@ -1125,6 +1138,80 @@ app.delete('/api/space/placements/:id', async (c) => {
   return c.json({ ok: true })
 })
 
+// Spatial copilot — deterministic layout metrics + LLM guideline recommendations
+app.post('/api/space/analyze', async (c) => {
+  const b = await c.req.json()
+  if (!b.room_id) return c.json({ error: 'room_id required' }, 400)
+  const room: any = await c.env.DB.prepare('SELECT * FROM space_rooms WHERE id = ?').bind(b.room_id).first()
+  if (!room) return c.json({ error: 'Room not found' }, 404)
+  const placements: any[] = (await c.env.DB.prepare('SELECT * FROM space_placements WHERE room_id = ? ORDER BY id').bind(b.room_id).all()).results as any[]
+
+  // ── Deterministic spatial metrics ──
+  const area = room.width_ft * room.length_ft
+  const used = placements.reduce((s, p) => s + p.footprint_ft * p.footprint_ft, 0)
+  const issues: any[] = []
+  const pairs: any[] = []
+  for (let i = 0; i < placements.length; i++) {
+    for (let j = i + 1; j < placements.length; j++) {
+      const a = placements[i], c2 = placements[j]
+      const ax = a.x_ft + a.footprint_ft / 2, ay = a.y_ft + a.footprint_ft / 2
+      const bx = c2.x_ft + c2.footprint_ft / 2, by = c2.y_ft + c2.footprint_ft / 2
+      const edgeDist = Math.max(Math.abs(ax - bx) - (a.footprint_ft + c2.footprint_ft) / 2,
+                                Math.abs(ay - by) - (a.footprint_ft + c2.footprint_ft) / 2)
+      const overlap = !(a.x_ft + a.footprint_ft <= c2.x_ft || c2.x_ft + c2.footprint_ft <= a.x_ft ||
+                        a.y_ft + a.footprint_ft <= c2.y_ft || c2.y_ft + c2.footprint_ft <= a.y_ft)
+      pairs.push({ a: a.item_name, b: c2.item_name, clearance_ft: Math.round(edgeDist * 10) / 10, overlap })
+      if (overlap) issues.push({ severity: 'critical', text: `OVERLAP: "${a.item_name}" and "${c2.item_name}" footprints intersect.` })
+      else if (edgeDist < 3) issues.push({ severity: 'high', text: `Tight clearance ${edgeDist.toFixed(1)} ft between "${a.item_name}" and "${c2.item_name}" — walkways need ≥3 ft (OSHA aisle guidance).` })
+    }
+    const p = placements[i]
+    const wall = Math.min(p.x_ft, p.y_ft, room.width_ft - (p.x_ft + p.footprint_ft), room.length_ft - (p.y_ft + p.footprint_ft))
+    if (wall < 1.5) issues.push({ severity: 'medium', text: `"${p.item_name}" is ${wall.toFixed(1)} ft from a wall — service access may be blocked.` })
+    if (['safety', 'power'].includes(p.category) && wall > Math.max(room.width_ft, room.length_ft) / 2)
+      issues.push({ severity: 'medium', text: `"${p.item_name}" (${p.category}) is deep in the room center — safety/power points should be near exits or walls.` })
+  }
+  if (used / area > 0.55) issues.push({ severity: 'high', text: `Floor utilization ${(used / area * 100).toFixed(0)}% exceeds 55% — egress and workflow suffer above this threshold.` })
+
+  const metrics = {
+    room: { name: room.name, width_ft: room.width_ft, length_ft: room.length_ft, area_sqft: area, campus: room.campus, room_type: room.room_type },
+    items: placements.length,
+    used_sqft: used,
+    utilization_pct: Math.round(used / area * 100),
+    pair_clearances: pairs,
+    issues
+  }
+
+  // ── LLM recommendations via vaulted key (role from body, default venture_owner) ──
+  const role = b.role || 'venture_owner'
+  const keyRow: any = await c.env.DB.prepare(
+    "SELECT * FROM api_vault_keys WHERE role = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1"
+  ).bind(role).first()
+    || await c.env.DB.prepare("SELECT * FROM api_vault_keys WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1").first()
+  let ai = null
+  if (keyRow) {
+    try {
+      const resp = await fetch(`${keyRow.base_url}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${keyRow.api_key}` },
+        body: JSON.stringify({
+          model: keyRow.model,
+          temperature: 0.35,
+          messages: [
+            { role: 'system', content: 'You are a facilities & lab-layout copilot for a drone Centre of Excellence (fabrication lab, 3D printing farm, flight-test cell). Given room dimensions, equipment footprints, pairwise clearances and detected issues, produce: (1) TOP 3-5 LAYOUT RECOMMENDATIONS as concise bullets, (2) SAFETY/COMPLIANCE notes (aisle widths, fire access, power/dust/fume routing), (3) SUGGESTED REPOSITIONS referencing item names and target x,y in feet. Plain text, headers in CAPS, ≤350 words.' },
+            { role: 'user', content: 'SPATIAL METRICS (JSON):\n' + JSON.stringify(metrics).slice(0, 6000) }
+          ]
+        })
+      })
+      const data: any = await resp.json()
+      if (resp.ok) ai = data?.choices?.[0]?.message?.content || null
+      else ai = `LLM error: ${data?.error?.message || resp.status}`
+    } catch (e: any) { ai = 'LLM request failed: ' + (e.message || 'network') }
+  } else {
+    ai = null // no key — frontend will show metrics-only mode
+  }
+  return c.json({ ok: true, metrics, issues, ai, llm_used: !!keyRow })
+})
+
 // ============================================================
 // SUPERVISOR AI ROUTER + COE BULLETIN
 // ============================================================
@@ -1165,14 +1252,19 @@ app.put('/api/supervisor/bulletins/:id/acknowledge', async (c) => {
 app.post('/api/supervisor/advisories/analyze', async (c) => {
   if (!await requireRole(c, 'supervisor')) return c.json({ error: 'Supervisor access required' }, 403)
   const b = await c.req.json()
-  const cfg: any = await c.env.DB.prepare('SELECT * FROM supervisor_llm_configs WHERE role=? AND is_enabled=1').bind('supervisor').first()
-  const apiToken = cfg?.token_ciphertext ? await decryptSecret(c, cfg.token_ciphertext) : cfg?.api_token
-  if (!apiToken) return c.json({ error: 'Configure the Supervisor LLM adapter first' }, 400)
+  // Unified LLM config: vault first, legacy supervisor adapter as fallback
+  const vaultKey: any = await c.env.DB.prepare("SELECT * FROM api_vault_keys WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1").first()
+  const cfgLegacy: any = await c.env.DB.prepare('SELECT * FROM supervisor_llm_configs WHERE role=? AND is_enabled=1').bind('supervisor').first()
+  const legacyToken = cfgLegacy?.token_ciphertext ? await decryptSecret(c, cfgLegacy.token_ciphertext) : cfgLegacy?.api_token
+  const cfg = vaultKey
+    ? { base_url: vaultKey.base_url, model: vaultKey.model, apiToken: vaultKey.api_key, token_budget: 2000 }
+    : (cfgLegacy ? { base_url: cfgLegacy.base_url, model: cfgLegacy.model, apiToken: legacyToken, token_budget: cfgLegacy.token_budget } : null)
+  if (!cfg?.apiToken) return c.json({ error: 'No API key in the vault. Add one in Report Creator → API Vault.', needs_key: true }, 400)
   const room = b.room_id ? await c.env.DB.prepare('SELECT * FROM space_rooms WHERE id=?').bind(b.room_id).first() : null
   const placements = b.room_id ? await c.env.DB.prepare('SELECT * FROM space_placements WHERE room_id=?').bind(b.room_id).all() : { results: [] }
   const prompt = `Analyze this facility plan from a supervisor safety and operability lens. Return JSON array with title, category, severity (low|medium|high|critical), advisory. Evaluate equipment placement, safety envelopes/clearances, chimney or exhaust, pathway routing, power/utilities, ergonomics, fire access, and human workflow. Treat manufacturer specs as unverified unless supplied. Room: ${JSON.stringify(room)}. Placements: ${JSON.stringify(placements.results)}. Source material: ${JSON.stringify(b.source_material || '')}. User focus: ${b.prompt || 'Identify critical issues and practical mitigations.'}`
   try {
-    const response = await fetch(`${String(cfg.base_url).replace(/\/$/, '')}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiToken}` }, body: JSON.stringify({ model: cfg.model, messages: [{ role: 'system', content: 'You are a cautious industrial space-planning advisor. Do not certify compliance; flag items for qualified review.' }, { role: 'user', content: prompt }], max_tokens: cfg.token_budget, temperature: 0.2 }) })
+    const response = await fetch(`${String(cfg.base_url).replace(/\/$/, '')}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiToken}` }, body: JSON.stringify({ model: cfg.model, messages: [{ role: 'system', content: 'You are a cautious industrial space-planning advisor. Do not certify compliance; flag items for qualified review.' }, { role: 'user', content: prompt }], max_tokens: cfg.token_budget, temperature: 0.2 }) })
     if (!response.ok) return c.json({ error: `LLM API error: ${response.status}` }, 502)
     const data: any = await response.json(); const raw = data.choices?.[0]?.message?.content || '[]'
     const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim()
@@ -1200,7 +1292,7 @@ app.post('/api/supervisor/advisories/report', async (c) => {
   const content = (rows.results as any[]).map(a => `[${a.severity.toUpperCase()}] ${a.title}\n${a.advisory}\nScope: ${a.room_name || 'all rooms'}${a.item_name ? ` / ${a.item_name}` : ''}\nStatus: ${a.status}`).join('\n\n') || 'No supervisor advisories yet.'
   const token = crypto.randomUUID()
   const result = await c.env.DB.prepare('INSERT INTO reports (title, report_type, content, generated_by, share_token) VALUES (?,?,?,?,?)').bind(`Supervisor Space Advisory — ${new Date().toISOString().slice(0,10)}`, 'custom', content, 'supervisor', token).run()
-  return c.json({ ok: true, id: result.meta.last_row_id, content })
+  return c.json({ ok: true, id: result.meta.last_row_id, content, share_token: token })
 })
 
 app.post('/api/supervisor/planner/validate', async (c) => {
@@ -1225,8 +1317,15 @@ app.post('/api/supervisor/planner/validate', async (c) => {
 app.post('/api/supervisor/specs/extract', async (c) => {
   if (!await requireRole(c, 'supervisor')) return c.json({ error: 'Supervisor access required' }, 403)
   const b = await c.req.json(); if (!b.source_url) return c.json({ error: 'source_url required' }, 400)
-  const cfg: any = await c.env.DB.prepare('SELECT * FROM supervisor_llm_configs WHERE role=? AND is_enabled=1').bind('supervisor').first(); const apiToken = cfg?.token_ciphertext ? await decryptSecret(c, cfg.token_ciphertext) : cfg?.api_token
-  if (!apiToken) return c.json({ error: 'Configure the Supervisor LLM adapter first' }, 400)
+  // Unified LLM config: vault first, legacy supervisor adapter as fallback
+  const vaultKey: any = await c.env.DB.prepare("SELECT * FROM api_vault_keys WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1").first()
+  const cfgLegacy: any = await c.env.DB.prepare('SELECT * FROM supervisor_llm_configs WHERE role=? AND is_enabled=1').bind('supervisor').first()
+  const legacyToken = cfgLegacy?.token_ciphertext ? await decryptSecret(c, cfgLegacy.token_ciphertext) : cfgLegacy?.api_token
+  const cfg = vaultKey
+    ? { base_url: vaultKey.base_url, model: vaultKey.model, apiToken: vaultKey.api_key, token_budget: 2000 }
+    : (cfgLegacy ? { base_url: cfgLegacy.base_url, model: cfgLegacy.model, apiToken: legacyToken, token_budget: cfgLegacy.token_budget } : null)
+  const apiToken = cfg?.apiToken
+  if (!apiToken) return c.json({ error: 'No API key in the vault. Add one in Report Creator → API Vault.', needs_key: true }, 400)
   let sourceText = b.source_url
   try { const sourceResponse = await fetch(b.source_url); if (sourceResponse.ok && (sourceResponse.headers.get('content-type') || '').includes('text/html')) sourceText = (await sourceResponse.text()).replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 30000) } catch (_) {}
   const prompt = `Extract product-spec facts from this source for facility planning. Return JSON only with: manufacturer, model, dimensions, footprint, weight, power, voltage, heat, exhaust_or_chimney, ventilation, noise, operating_clearance, maintenance_clearance, ergonomic_notes, source_limitations. Use null when unknown, never guess. Source URL: ${b.source_url}. Source content or reference: ${sourceText}`
@@ -1391,6 +1490,137 @@ app.post('/api/email/send', async (c) => {
 })
 
 // ============================================================
+// ============================================================
+// API VAULT (v5) — per-role LLM keys (kie.ai Gemini via OpenAI-compatible API)
+// ============================================================
+
+const maskKey = (k: string) => k.length > 8 ? k.slice(0, 4) + '••••••••' + k.slice(-4) : '••••••••'
+
+app.get('/api/vault/keys', async (c) => {
+  const rows = await c.env.DB.prepare('SELECT id, role, provider, label, api_key, base_url, model, is_active, updated_at FROM api_vault_keys ORDER BY role').all()
+  return c.json((rows.results as any[]).map(r => ({ ...r, api_key: undefined, key_preview: maskKey(r.api_key) })))
+})
+
+app.post('/api/vault/keys', async (c) => {
+  const b = await c.req.json()
+  if (!b.role || !b.api_key) return c.json({ error: 'role and api_key required' }, 400)
+  await c.env.DB.prepare(
+    `INSERT INTO api_vault_keys (role, provider, label, api_key, base_url, model, is_active, updated_at)
+     VALUES (?,?,?,?,?,?,1,datetime('now'))
+     ON CONFLICT(role, provider) DO UPDATE SET api_key=excluded.api_key, label=excluded.label,
+       base_url=excluded.base_url, model=excluded.model, is_active=1, updated_at=datetime('now')`
+  ).bind(b.role, b.provider || 'kie', b.label || 'kie.ai Gemini', b.api_key,
+    b.base_url || 'https://api.kie.ai/gemini-3-8-flash-openai/v1', b.model || 'gemini-3-8-flash').run()
+  return c.json({ ok: true })
+})
+
+app.delete('/api/vault/keys/:id', async (c) => {
+  await c.env.DB.prepare('DELETE FROM api_vault_keys WHERE id = ?').bind(c.req.param('id')).run()
+  return c.json({ ok: true })
+})
+
+// LLM proxy — server-side call to kie.ai using the vaulted key for the caller's role
+app.post('/api/llm/chat', async (c) => {
+  const b = await c.req.json()
+  const role = b.role || 'coe_leader'
+  if (!Array.isArray(b.messages) || !b.messages.length) return c.json({ error: 'messages[] required' }, 400)
+  // Unified vault: prefer the caller's role key, fall back to ANY active key
+  const keyRow = await c.env.DB.prepare(
+    "SELECT * FROM api_vault_keys WHERE role = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1"
+  ).bind(role).first<any>()
+    || await c.env.DB.prepare("SELECT * FROM api_vault_keys WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1").first<any>()
+  if (!keyRow) return c.json({ error: 'No API key in the vault. Add one in Report Creator → API Vault.', needs_key: true }, 400)
+  try {
+    const resp = await fetch(`${keyRow.base_url}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${keyRow.api_key}` },
+      body: JSON.stringify({ model: keyRow.model, messages: b.messages, temperature: b.temperature ?? 0.4 })
+    })
+    const data = await resp.json() as any
+    if (!resp.ok) return c.json({ error: data?.error?.message || `LLM provider error (${resp.status})` }, 502)
+    const content = data?.choices?.[0]?.message?.content || ''
+    return c.json({ ok: true, content, model: keyRow.model })
+  } catch (e: any) {
+    return c.json({ error: 'LLM request failed: ' + (e.message || 'network error') }, 502)
+  }
+})
+
+// ============================================================
+// COLLABORATIVE WHITEBOARD (v5) — shared sticky board between roles
+// ============================================================
+
+app.get('/api/whiteboard/notes', async (c) => {
+  const rows = await c.env.DB.prepare('SELECT * FROM whiteboard_notes ORDER BY id').all()
+  return c.json(rows.results)
+})
+app.post('/api/whiteboard/notes', async (c) => {
+  const b = await c.req.json()
+  const r = await c.env.DB.prepare(
+    'INSERT INTO whiteboard_notes (author_role, text, color, x, y, w, h) VALUES (?,?,?,?,?,?,?)'
+  ).bind(b.author_role || 'coe_leader', b.text || '', b.color || '#f59e0b', b.x ?? 40, b.y ?? 40, b.w ?? 220, b.h ?? 160).run()
+  return c.json({ ok: true, id: r.meta.last_row_id })
+})
+app.put('/api/whiteboard/notes/:id', async (c) => {
+  const b = await c.req.json()
+  await c.env.DB.prepare(
+    `UPDATE whiteboard_notes SET text = COALESCE(?, text), color = COALESCE(?, color),
+     x = COALESCE(?, x), y = COALESCE(?, y), w = COALESCE(?, w), h = COALESCE(?, h),
+     ai_enhanced = COALESCE(?, ai_enhanced), updated_at = datetime('now') WHERE id = ?`
+  ).bind(b.text ?? null, b.color ?? null, b.x ?? null, b.y ?? null, b.w ?? null, b.h ?? null,
+    b.ai_enhanced ?? null, c.req.param('id')).run()
+  return c.json({ ok: true })
+})
+app.delete('/api/whiteboard/notes/:id', async (c) => {
+  await c.env.DB.prepare('DELETE FROM whiteboard_notes WHERE id = ?').bind(c.req.param('id')).run()
+  return c.json({ ok: true })
+})
+
+// ============================================================
+// MEETING ACTION TRACKER (v5) — Jira-lite for CoE setup follow-ups
+// ============================================================
+
+app.get('/api/action-items', async (c) => {
+  const status = c.req.query('status')
+  const meeting = c.req.query('meeting')
+  let sql = 'SELECT * FROM meeting_action_items'
+  const conds: string[] = []
+  const binds: any[] = []
+  if (status) { conds.push('status = ?'); binds.push(status) }
+  if (meeting) { conds.push('meeting_title = ?'); binds.push(meeting) }
+  if (conds.length) sql += ' WHERE ' + conds.join(' AND ')
+  sql += " ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, sort_order, id"
+  const rows = await c.env.DB.prepare(sql).bind(...binds).all()
+  const meetings = await c.env.DB.prepare(
+    'SELECT DISTINCT meeting_title, meeting_date FROM meeting_action_items ORDER BY meeting_date DESC'
+  ).all()
+  return c.json({ items: rows.results, meetings: meetings.results })
+})
+app.post('/api/action-items', async (c) => {
+  const b = await c.req.json()
+  if (!b.title || !b.meeting_title) return c.json({ error: 'title and meeting_title required' }, 400)
+  const r = await c.env.DB.prepare(
+    `INSERT INTO meeting_action_items (meeting_title, meeting_date, title, description, owner, status, priority, due_date, section_ref, created_by)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`
+  ).bind(b.meeting_title, b.meeting_date || null, b.title, b.description || '', b.owner || 'coe_leader',
+    b.status || 'todo', b.priority || 'medium', b.due_date || null, b.section_ref || null, b.created_by || 'coe_leader').run()
+  return c.json({ ok: true, id: r.meta.last_row_id })
+})
+app.put('/api/action-items/:id', async (c) => {
+  const b = await c.req.json()
+  await c.env.DB.prepare(
+    `UPDATE meeting_action_items SET title = COALESCE(?, title), description = COALESCE(?, description),
+     owner = COALESCE(?, owner), status = COALESCE(?, status), priority = COALESCE(?, priority),
+     due_date = COALESCE(?, due_date), section_ref = COALESCE(?, section_ref), updated_at = datetime('now')
+     WHERE id = ?`
+  ).bind(b.title ?? null, b.description ?? null, b.owner ?? null, b.status ?? null, b.priority ?? null,
+    b.due_date ?? null, b.section_ref ?? null, c.req.param('id')).run()
+  return c.json({ ok: true })
+})
+app.delete('/api/action-items/:id', async (c) => {
+  await c.env.DB.prepare('DELETE FROM meeting_action_items WHERE id = ?').bind(c.req.param('id')).run()
+  return c.json({ ok: true })
+})
+
 // EXPORT / DOWNLOAD
 // ============================================================
 app.get('/api/export/csv/:type', async (c) => {
@@ -1466,6 +1696,11 @@ export default app
 // ============================================================
 // FULL SPA HTML — Single Page Application
 // ============================================================
+// Cache-bust static assets per deploy so browsers/edge never serve a stale bundle.
+// __ASSET_V__ is injected by Vite define at build time (vite.config.ts) — a runtime
+// Date.now() stamp collapses to ?v0 on Workers because Date is frozen outside requests.
+declare const __ASSET_V__: string
+const ASSET_V = typeof __ASSET_V__ !== 'undefined' ? __ASSET_V__ : 'vdev'
 const SPA_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1479,7 +1714,8 @@ const SPA_HTML = `<!DOCTYPE html>
   <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.2/dist/gsap.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/dayjs.min.js"></script>
-  <link href="/static/styles.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <link href="/static/styles.css?${ASSET_V}" rel="stylesheet">
   <script>
     tailwind.config = {
       theme: {
@@ -1572,12 +1808,27 @@ const SPA_HTML = `<!DOCTYPE html>
     body.day-mode input::placeholder, body.day-mode textarea::placeholder { color: #94a3b8 !important; }
     body.day-mode #theme-toggle .theme-icon-moon { display: none; }
     body:not(.day-mode) #theme-toggle .theme-icon-sun { display: none; }
+
+    /* ── Floating-panel visibility guards (v5) — panels/modals/toasts always above 3D canvases ── */
+    canvas { z-index: 0; }
+    #global-modal { z-index: 80 !important; }
+    #global-modal .glass-card { opacity: 1 !important; background: rgba(15,23,42,0.92) !important; }
+    body.day-mode #global-modal .glass-card { background: rgba(255,255,255,0.96) !important; }
+    #toast-container { z-index: 95 !important; }
+    .wb-note { position: absolute; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.35); cursor: grab; user-select: none; display: flex; flex-direction: column; overflow: hidden; opacity: 1; }
+    .wb-note:active { cursor: grabbing; }
+    /* Landing hero (v5) */
+    #hero-canvas-wrap { position: absolute; inset: 0; z-index: 1; }
+    .hud-chip { background: rgba(15,23,42,0.7); border: 1px solid rgba(99,102,241,0.35); backdrop-filter: blur(8px); }
+    body.day-mode .hud-chip { background: rgba(255,255,255,0.75); border-color: rgba(79,70,229,0.3); }
+    .scan-line { position: absolute; inset: 0; pointer-events: none; z-index: 2; background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(99,102,241,0.025) 3px 4px); }
+    .phase-chip { transition: all 0.3s ease; }
   </style>
 </head>
 <body class="hero-bg grid-pattern text-slate-100 min-h-screen font-sans antialiased">
   <div class="drone-hero-overlay"></div>
   <div id="app-root" class="relative z-10"></div>
   <div id="toast-container" class="fixed top-4 right-4 z-50 space-y-2"></div>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?${ASSET_V}"></script>
 </body>
 </html>`

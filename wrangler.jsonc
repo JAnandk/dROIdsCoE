@@ -7,15 +7,10 @@
     "nodejs_compat"
   ],
   "d1_databases": [
-{
-  "name": "droidscoe",
-  "main": "dist/_worker.js",
-  "compatibility_date": "2026-09-06"
-}
-
+    {
+      "binding": "DB",
+      "database_name": "srm-droids-coe-prod",
+      "database_id": "srm-droids-coe-prod-id"
+    }
   ]
-{
-  "name": "droidscoe",
-  "main": "src/index.ts"  // ← path to your Worker entry file
-}
 }
